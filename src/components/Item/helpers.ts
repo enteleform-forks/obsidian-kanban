@@ -525,7 +525,7 @@ async function handleNullDraggable(
   win: Window & typeof globalThis
 ) {
   const isClipboardEvent = (e as DragEvent).view ? false : true;
-  const forcePlaintext = isClipboardEvent ? stateManager.getAView().isShiftPressed : false;
+  const forcePlaintext = isClipboardEvent ? stateManager.getARenderer().isShiftPressed : false;
   const transfer = isClipboardEvent
     ? (e as ClipboardEvent).clipboardData
     : (e as DragEvent).dataTransfer;

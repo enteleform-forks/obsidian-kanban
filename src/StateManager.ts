@@ -2,13 +2,14 @@ import update from 'immutability-helper';
 import { App, TFile, moment } from 'obsidian';
 import { useEffect, useState } from 'preact/compat';
 
-import { KanbanView } from './KanbanView';
 import { KanbanSettings, SettingRetrievers } from './Settings';
 import { getDefaultDateFormat, getDefaultTimeFormat } from './components/helpers';
 import { Board, BoardTemplate, Item } from './components/types';
 import { ListFormat } from './parsers/List';
 import { BaseFormat, frontmatterKey, shouldRefreshBoard } from './parsers/common';
 import { getTaskStatusDone } from './parsers/helpers/inlineMetadata';
+// Import type only to avoid circular dependency
+import type { BoardRenderer } from './rendering/BoardRenderer';
 import { defaultDateTrigger, defaultMetadataPosition, defaultTimeTrigger } from './settingHelpers';
 
 export class StateManager {
@@ -18,7 +19,7 @@ export class StateManager {
   stateReceivers: Array<(state: Board) => void> = [];
   settingsNotifiers: Map<keyof KanbanSettings, Array<() => void>> = new Map();
 
-  viewSet: Set<KanbanView> = new Set();
+  rendererSet: Set<BoardRenderer> = new Set();
   compiledSettings: KanbanSettings = {};
 
   app: App;
@@ -29,50 +30,61 @@ export class StateManager {
 
   constructor(
     app: App,
-    initialView: KanbanView,
+    initialRenderer: BoardRenderer,
     initialData: string,
     onEmpty: () => void,
     getGlobalSettings: () => KanbanSettings
   ) {
     this.app = app;
-    this.file = initialView.file;
+    this.file = initialRenderer.file;
     this.onEmpty = onEmpty;
     this.getGlobalSettings = getGlobalSettings;
     this.parser = new ListFormat(this);
 
-    this.registerView(initialView, initialData, true);
+    this.registerRenderer(initialRenderer, initialData, true);
   }
 
-  getAView(): KanbanView {
-    return this.viewSet.values().next().value;
+  getARenderer(): BoardRenderer {
+    return this.rendererSet.values().next().value;
   }
 
   hasError(): boolean {
     return !!this.state?.data?.errors?.length;
   }
 
-  async registerView(view: KanbanView, data: string, shouldParseData: boolean) {
-    if (!this.viewSet.has(view)) {
-      this.viewSet.add(view);
+  async registerRenderer(renderer: BoardRenderer, data: string, shouldParseData: boolean) {
+    if (!this.rendererSet.has(renderer)) {
+      this.rendererSet.add(renderer);
+    }
+
+    // Mark first renderer as primary (responsible for saving)
+    if (this.rendererSet.size === 1) {
+      renderer.isPrimary = true;
     }
 
     // This helps delay blocking the UI until the the loading indicator is displayed
     await new Promise((res) => activeWindow.setTimeout(res, 10));
 
     if (shouldParseData) {
-      await this.newBoard(view, data);
+      await this.newBoard(renderer, data);
     } else {
-      await view.prerender(this.state);
+      await renderer.prerender(this.state);
     }
 
-    view.populateViewState(this.state.data.settings);
+    renderer.populateViewState(this.state.data.settings);
   }
 
-  unregisterView(view: KanbanView) {
-    if (this.viewSet.has(view)) {
-      this.viewSet.delete(view);
+  unregisterRenderer(renderer: BoardRenderer) {
+    if (this.rendererSet.has(renderer)) {
+      this.rendererSet.delete(renderer);
 
-      if (this.viewSet.size === 0) {
+      // If primary renderer is removed, assign new primary
+      if (renderer.isPrimary && this.rendererSet.size > 0) {
+        const newPrimary = this.rendererSet.values().next().value;
+        newPrimary.isPrimary = true;
+      }
+
+      if (this.rendererSet.size === 0) {
         this.onEmpty();
       }
     }
@@ -86,10 +98,10 @@ export class StateManager {
     };
   }
 
-  async newBoard(view: KanbanView, md: string) {
+  async newBoard(renderer: BoardRenderer, md: string) {
     try {
       const board = this.getParsedBoard(md);
-      await view.prerender(board);
+      await renderer.prerender(board);
       this.setState(board, false);
     } catch (e) {
       this.setError(e);
@@ -101,14 +113,21 @@ export class StateManager {
       return;
     }
 
-    const view = this.getAView();
+    const renderer = this.getARenderer();
 
-    if (view) {
+    if (renderer) {
       const fileStr = this.parser.boardToMd(this.state);
-      view.requestSaveToDisk(fileStr);
 
-      this.viewSet.forEach((view) => {
-        view.data = fileStr;
+      // Only request save from primary renderer if it has that capability
+      if (renderer.isPrimary && (renderer as any).requestSaveToDisk) {
+        (renderer as any).requestSaveToDisk(fileStr);
+      }
+
+      // Update data on all renderers
+      this.rendererSet.forEach((r) => {
+        if ((r as any).data !== undefined) {
+          (r as any).data = fileStr;
+        }
       });
     }
   }
@@ -127,7 +146,11 @@ export class StateManager {
         this.settingsNotifiers.forEach((notifiers) => {
           notifiers.forEach((fn) => fn());
         });
-        this.viewSet.forEach((view) => view.initHeaderButtons());
+        this.rendererSet.forEach((renderer) => {
+          if ((renderer as any).initHeaderButtons) {
+            (renderer as any).initHeaderButtons();
+          }
+        });
       } catch (e) {
         console.error(e);
         this.setError(e);
@@ -156,9 +179,11 @@ export class StateManager {
         this.compileSettings();
       }
 
-      this.viewSet.forEach((view) => {
-        view.initHeaderButtons();
-        view.validatePreviewCache(newState);
+      this.rendererSet.forEach((renderer) => {
+        if ((renderer as any).initHeaderButtons) {
+          (renderer as any).initHeaderButtons();
+        }
+        renderer.validatePreviewCache(newState);
       });
 
       if (shouldSave) {
@@ -355,7 +380,11 @@ export class StateManager {
 
   async reparseBoardFromMd() {
     try {
-      this.setState(this.getParsedBoard(this.getAView().data), false);
+      const renderer = this.getARenderer();
+      const data = (renderer as any).data;
+      if (data !== undefined) {
+        this.setState(this.getParsedBoard(data), false);
+      }
     } catch (e) {
       console.error(e);
       this.setError(e);

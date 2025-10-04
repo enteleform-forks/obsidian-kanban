@@ -35,9 +35,27 @@ const View = memo(function View({ view }: { view: KanbanView }) {
   return createPortal(view.getPortal(), view.contentEl);
 });
 
+const RendererPortal = memo(function RendererPortal({
+  renderer,
+}: {
+  renderer: import('./rendering/BoardRenderer').BoardRenderer;
+}) {
+  return createPortal(renderer.getPortal(), renderer.contentEl);
+});
+
 export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin }) {
   const views = plugin.useKanbanViews(win);
-  const portals: JSX.Element[] = views.map((view) => <View key={view.id} view={view} />);
+  const renderers = plugin.useRenderers(win);
+
+  // Create portals for all views (which contain their board renderers)
+  const viewPortals: JSX.Element[] = views.map((view) => <View key={view.id} view={view} />);
+
+  // Create portals for standalone renderers (embeds)
+  const rendererPortals: JSX.Element[] = renderers
+    .filter((r) => !views.some((v) => v.boardRenderer === r)) // Exclude renderers already in views
+    .map((renderer) => <RendererPortal key={renderer.id} renderer={renderer} />);
+
+  const portals = [...viewPortals, ...rendererPortals];
 
   const handleDrop = useCallback(
     (dragEntity: Entity, dropEntity: Entity) => {
@@ -102,8 +120,10 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
 
       // Same board
       if (sourceFile === destinationFile) {
-        const view = plugin.getKanbanView(dragEntity.scopeId, dragEntityData.win);
-        const stateManager = plugin.stateManagers.get(view.file);
+        const rendererInfo = plugin.getRenderer(dragEntity.scopeId, dragEntityData.win);
+        if (!rendererInfo) return;
+
+        const stateManager = rendererInfo.renderer.stateManager;
 
         if (inDropArea) {
           dropPath.push(0);
@@ -152,14 +172,15 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
 
             if (from < to) to -= 1;
 
-            const collapsedState = view.getViewState('list-collapse');
+            const renderer = rendererInfo.renderer;
+            const collapsedState = renderer.getViewState('list-collapse');
             const op = (collapsedState: boolean[]) => {
               const newState = [...collapsedState];
               newState.splice(to, 0, newState.splice(from, 1)[0]);
               return newState;
             };
 
-            view.setViewState('list-collapse', undefined, op);
+            renderer.setViewState('list-collapse', undefined, op);
 
             return update<Board>(newBoard, {
               data: { settings: { 'list-collapse': { $set: op(collapsedState) } } },
@@ -182,10 +203,15 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
         });
       }
 
-      const sourceView = plugin.getKanbanView(dragEntity.scopeId, dragEntityData.win);
-      const sourceStateManager = plugin.stateManagers.get(sourceView.file);
-      const destinationView = plugin.getKanbanView(dropEntity.scopeId, dropEntityData.win);
-      const destinationStateManager = plugin.stateManagers.get(destinationView.file);
+      const sourceInfo = plugin.getRenderer(dragEntity.scopeId, dragEntityData.win);
+      const destinationInfo = plugin.getRenderer(dropEntity.scopeId, dropEntityData.win);
+
+      if (!sourceInfo || !destinationInfo) return;
+
+      const sourceRenderer = sourceInfo.renderer;
+      const sourceStateManager = sourceRenderer.stateManager;
+      const destinationRenderer = destinationInfo.renderer;
+      const destinationStateManager = destinationRenderer.stateManager;
 
       sourceStateManager.setState((sourceBoard) => {
         const entity = getEntityFromPath(sourceBoard, dragPath);
@@ -221,15 +247,15 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
           }
 
           if (entity.type === DataTypes.Lane) {
-            const collapsedState = destinationView.getViewState('list-collapse');
-            const val = sourceView.getViewState('list-collapse')[dragPath.last()];
+            const collapsedState = destinationRenderer.getViewState('list-collapse');
+            const val = sourceRenderer.getViewState('list-collapse')[dragPath.last()];
             const op = (collapsedState: boolean[]) => {
               const newState = [...collapsedState];
               newState.splice(dropPath.last(), 0, val);
               return newState;
             };
 
-            destinationView.setViewState('list-collapse', undefined, op);
+            destinationRenderer.setViewState('list-collapse', undefined, op);
 
             return update<Board>(insertEntity(destinationBoard, dropPath, toInsert), {
               data: { settings: { 'list-collapse': { $set: op(collapsedState) } } },
@@ -240,13 +266,13 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
         });
 
         if (entity.type === DataTypes.Lane) {
-          const collapsedState = sourceView.getViewState('list-collapse');
+          const collapsedState = sourceRenderer.getViewState('list-collapse');
           const op = (collapsedState: boolean[]) => {
             const newState = [...collapsedState];
             newState.splice(dragPath.last(), 1);
             return newState;
           };
-          sourceView.setViewState('list-collapse', undefined, op);
+          sourceRenderer.setViewState('list-collapse', undefined, op);
 
           return update<Board>(removeEntity(sourceBoard, dragPath), {
             data: { settings: { 'list-collapse': { $set: op(collapsedState) } } },
@@ -272,16 +298,19 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
 
               const overlayData = entity.getData();
 
-              const view = plugin.getKanbanView(entity.scopeId, overlayData.win);
-              const stateManager = plugin.stateManagers.get(view.file);
+              const rendererInfo = plugin.getRenderer(entity.scopeId, overlayData.win);
+              if (!rendererInfo) return [null, null];
+
+              const renderer = rendererInfo.renderer;
+              const stateManager = renderer.stateManager;
               const data = getEntityFromPath(stateManager.state, entity.getPath());
-              const boardModifiers = getBoardModifiers(view, stateManager);
-              const filePath = view.file.path;
+              const boardModifiers = getBoardModifiers(renderer, stateManager);
+              const filePath = renderer.file.path;
 
               return [
                 data,
                 {
-                  view,
+                  view: renderer as any,
                   stateManager,
                   boardModifiers,
                   filePath,
@@ -290,11 +319,12 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
             }, [entity]);
 
             if (data?.type === DataTypes.Lane) {
+              const renderer = context?.view;
               const boardView =
-                context?.view.viewSettings[frontmatterKey] ||
+                renderer?.viewSettings?.[frontmatterKey] ||
                 context?.stateManager.getSetting(frontmatterKey);
               const collapseState =
-                context?.view.viewSettings['list-collapse'] ||
+                renderer?.viewSettings?.['list-collapse'] ||
                 context?.stateManager.getSetting('list-collapse');
               const laneIndex = entity.getPath().last();
 

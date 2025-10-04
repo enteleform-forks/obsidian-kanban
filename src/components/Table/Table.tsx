@@ -119,7 +119,7 @@ export function TableView({
     }
     activeWindow.clearTimeout(dbTimer.current);
     dbTimer.current = activeWindow.setTimeout(() => {
-      if (!stateManager.getAView()) return;
+      if (!stateManager.getARenderer()) return;
       stateManager.setState((board) => {
         return update(board, {
           data: {

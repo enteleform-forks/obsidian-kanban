@@ -20,10 +20,14 @@ import { getParentWindow } from './dnd/util/getWindow';
 import { hasFrontmatterKey } from './helpers';
 import { t } from './lang/helpers';
 import { basicFrontmatter, frontmatterKey } from './parsers/common';
+import { BoardRenderer } from './rendering/BoardRenderer';
+import { KanbanPostprocessor } from './rendering/KanbanPostprocessor';
 
 interface WindowRegistry {
   viewMap: Map<string, KanbanView>;
+  rendererMap: Map<string, BoardRenderer>;
   viewStateReceivers: Array<(views: KanbanView[]) => void>;
+  rendererStateReceivers: Array<(renderers: BoardRenderer[]) => void>;
   appRoot: HTMLElement;
 }
 
@@ -130,6 +134,14 @@ export default class KanbanPlugin extends Plugin {
     this.addSettingTab(this.settingsTab);
 
     this.registerView(kanbanViewType, (leaf) => new KanbanView(leaf, this));
+
+    // Register markdown postprocessor for embedded kanban boards
+    const postprocessor = new KanbanPostprocessor(this);
+    this.registerMarkdownPostProcessor(
+      postprocessor.process.bind(postprocessor),
+      100 // Higher priority to ensure embeds are fully rendered
+    );
+
     this.registerMonkeyPatches();
     this.registerCommands();
     this.registerEvents();
@@ -179,7 +191,49 @@ export default class KanbanPlugin extends Plugin {
     return null;
   }
 
+  getRenderer(scopeId: string, win: Window): { renderer: BoardRenderer; view?: KanbanView } | null {
+    // scopeId format: ${rendererId}:::${filePath}
+    const [rendererId] = scopeId.split(':::');
+
+    const reg = this.windowRegistry.get(win);
+    if (!reg) {
+      // Try other windows
+      for (const reg of this.windowRegistry.values()) {
+        // Check standalone renderers
+        if (reg.rendererMap.has(rendererId)) {
+          return { renderer: reg.rendererMap.get(rendererId) };
+        }
+
+        // Check view renderers
+        for (const view of reg.viewMap.values()) {
+          if (view.boardRenderer?.id === rendererId) {
+            return { renderer: view.boardRenderer, view };
+          }
+        }
+      }
+      return null;
+    }
+
+    // Check standalone renderers in this window
+    if (reg.rendererMap.has(rendererId)) {
+      return { renderer: reg.rendererMap.get(rendererId) };
+    }
+
+    // Check view renderers in this window
+    for (const view of reg.viewMap.values()) {
+      if (view.boardRenderer?.id === rendererId) {
+        return { renderer: view.boardRenderer, view };
+      }
+    }
+
+    return null;
+  }
+
   getStateManager(file: TFile) {
+    return this.stateManagers.get(file);
+  }
+
+  getOrCreateStateManager(file: TFile): StateManager {
     return this.stateManagers.get(file);
   }
 
@@ -209,30 +263,59 @@ export default class KanbanPlugin extends Plugin {
     return state;
   }
 
-  addView(view: KanbanView, data: string, shouldParseData: boolean) {
+  useRenderers(win: Window): BoardRenderer[] {
+    const [state, setState] = useState(this.getAllRenderers(win));
+
+    useEffect(() => {
+      const reg = this.windowRegistry.get(win);
+
+      reg?.rendererStateReceivers.push(setState);
+
+      return () => {
+        reg?.rendererStateReceivers.remove(setState);
+      };
+    }, [win]);
+
+    return state;
+  }
+
+  async addView(view: KanbanView, data: string, shouldParseData: boolean) {
     const win = view.getWindow();
     const reg = this.windowRegistry.get(win);
 
     if (!reg) return;
-    if (!reg.viewMap.has(view.id)) {
-      reg.viewMap.set(view.id, view);
-    }
 
     const file = view.file;
 
+    // Initialize board renderer if not already done
+    if (!view.boardRenderer) {
+      view['setupBoardRenderer']();
+    }
+
+    const renderer = view.boardRenderer;
+    if (!renderer) return;
+
+    let stateManager: StateManager;
+
     if (this.stateManagers.has(file)) {
-      this.stateManagers.get(file).registerView(view, data, shouldParseData);
+      stateManager = this.stateManagers.get(file);
+      await stateManager.registerRenderer(renderer, data, shouldParseData);
     } else {
-      this.stateManagers.set(
-        file,
-        new StateManager(
-          this.app,
-          view,
-          data,
-          () => this.stateManagers.delete(file),
-          () => this.settings
-        )
+      stateManager = new StateManager(
+        this.app,
+        renderer,
+        data,
+        () => this.stateManagers.delete(file),
+        () => this.settings
       );
+      this.stateManagers.set(file, stateManager);
+    }
+
+    await renderer.initialize(stateManager);
+
+    // Add view to registry AFTER initialization is complete
+    if (!reg.viewMap.has(view.id)) {
+      reg.viewMap.set(view.id, view);
     }
 
     reg.viewStateReceivers.forEach((fn) => fn(this.getKanbanViews(win)));
@@ -252,8 +335,8 @@ export default class KanbanPlugin extends Plugin {
       reg.viewMap.delete(view.id);
     }
 
-    if (this.stateManagers.has(file)) {
-      this.stateManagers.get(file).unregisterView(view);
+    if (view.boardRenderer && this.stateManagers.has(file)) {
+      this.stateManagers.get(file).unregisterRenderer(view.boardRenderer);
       reg.viewStateReceivers.forEach((fn) => fn(this.getKanbanViews(win)));
     }
   }
@@ -289,7 +372,9 @@ export default class KanbanPlugin extends Plugin {
 
     this.windowRegistry.set(win, {
       viewMap: new Map(),
+      rendererMap: new Map(),
       viewStateReceivers: [],
+      rendererStateReceivers: [],
       appRoot: el,
     });
 
@@ -311,10 +396,55 @@ export default class KanbanPlugin extends Plugin {
 
     reg.appRoot.remove();
     reg.viewMap.clear();
+    reg.rendererMap.clear();
     reg.viewStateReceivers.length = 0;
     reg.appRoot = null;
 
     this.windowRegistry.delete(win);
+  }
+
+  addRenderer(renderer: BoardRenderer, win: Window) {
+    const reg = this.windowRegistry.get(win);
+    if (!reg) return;
+
+    if (!reg.rendererMap.has(renderer.id)) {
+      reg.rendererMap.set(renderer.id, renderer);
+    }
+
+    reg.rendererStateReceivers.forEach((fn) => fn(this.getAllRenderers(win)));
+  }
+
+  removeRenderer(renderer: BoardRenderer, win: Window) {
+    const reg = this.windowRegistry.get(win);
+    if (!reg) return;
+
+    if (reg.rendererMap.has(renderer.id)) {
+      reg.rendererMap.delete(renderer.id);
+    }
+
+    reg.rendererStateReceivers.forEach((fn) => fn(this.getAllRenderers(win)));
+  }
+
+  getAllRenderers(win: Window): BoardRenderer[] {
+    const reg = this.windowRegistry.get(win);
+    if (!reg) return [];
+
+    // Combine view renderers and standalone renderers
+    const renderers: BoardRenderer[] = [];
+
+    // Add renderers from views
+    for (const view of reg.viewMap.values()) {
+      if (view.boardRenderer) {
+        renderers.push(view.boardRenderer);
+      }
+    }
+
+    // Add standalone renderers (embeds)
+    for (const renderer of reg.rendererMap.values()) {
+      renderers.push(renderer);
+    }
+
+    return renderers;
   }
 
   async setMarkdownView(leaf: WorkspaceLeaf, focus: boolean = true) {

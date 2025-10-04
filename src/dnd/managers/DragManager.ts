@@ -483,11 +483,11 @@ export function createHTMLDndHandlers(stateManager: StateManager) {
         e.preventDefault();
         dndManager.dragManager.dragMoveHTML(e);
       } else {
-        dndManager.dragManager.dragStartHTML(e, stateManager.getAView().id);
+        dndManager.dragManager.dragStartHTML(e, stateManager.getARenderer().id);
       }
 
       dndManager.dragManager.onHTMLDragLeave(() => {
-        dndManager.dragManager.dragEndHTML(e, stateManager.getAView().id, [], true);
+        dndManager.dragManager.dragEndHTML(e, stateManager.getARenderer().id, [], true);
       });
     },
     [dndManager, stateManager]
@@ -497,7 +497,7 @@ export function createHTMLDndHandlers(stateManager: StateManager) {
     async (e: DragEvent) => {
       dndManager.dragManager.dragEndHTML(
         e,
-        stateManager.getAView().id,
+        stateManager.getARenderer().id,
         await handleDragOrPaste(stateManager, e, activeWindow as Window & typeof globalThis),
         false
       );

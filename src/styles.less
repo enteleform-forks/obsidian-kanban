@@ -1782,3 +1782,27 @@ body:not(.native-scrollbars) .kanban-plugin__scroll-container::-webkit-scrollbar
     background-color: var(--date-background-color, rgba(var(--mono-rgb-100), 0.05));
   }
 }
+
+// Embedded kanban board styles
+.kanban-embed {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-2);
+  margin: var(--size-4-2) 0;
+  background-color: var(--background-primary);
+
+  .kanban-embed-container {
+    // Slightly smaller font for embedded boards
+    font-size: 0.95em;
+  }
+
+  .kanban-embed-error {
+    color: var(--text-error);
+    padding: var(--size-4-2);
+  }
+}
+
+// Hide default markdown rendering in kanban embeds
+.markdown-preview-view > .markdown-preview-section > .kanban-embed-content ~ *{
+	display: none !important;
+}
