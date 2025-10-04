@@ -211,20 +211,31 @@ export class ScrollManager {
     this.activeScroll.clear();
   };
 
-  handleBeginDragScroll = ({ scrollEntitySide, scrollStrength }: ScrollEventData) => {
+  handleBeginDragScroll = ({
+    scrollEntityId,
+    scrollEntitySide,
+    scrollStrength,
+  }: ScrollEventData) => {
+    if (!scrollEntityId || !scrollEntityId.startsWith(this.instanceId)) return;
     if (this.isDoneScrolling(scrollEntitySide)) return;
 
     this.activeScroll.set(scrollEntitySide, scrollStrength);
     this.handleDragScroll();
   };
 
-  handleUpdateDragScroll = ({ scrollEntitySide, scrollStrength }: ScrollEventData) => {
+  handleUpdateDragScroll = ({
+    scrollEntityId,
+    scrollEntitySide,
+    scrollStrength,
+  }: ScrollEventData) => {
+    if (!scrollEntityId || !scrollEntityId.startsWith(this.instanceId)) return;
     if (this.isDoneScrolling(scrollEntitySide)) return;
 
     this.activeScroll.set(scrollEntitySide, scrollStrength);
   };
 
-  handleEndDragScroll = ({ scrollEntitySide }: ScrollEventData) => {
+  handleEndDragScroll = ({ scrollEntityId, scrollEntitySide }: ScrollEventData) => {
+    if (!scrollEntityId || !scrollEntityId.startsWith(this.instanceId)) return;
     this.activeScroll.delete(scrollEntitySide);
   };
 
