@@ -211,7 +211,7 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
   );
 
   return (
-    <DndScope id={view.id}>
+    <DndScope id={`${view.id}:::${filePath}`}>
       <KanbanContext.Provider value={kanbanContext}>
         <SearchContext.Provider value={searchValue}>
           <div
