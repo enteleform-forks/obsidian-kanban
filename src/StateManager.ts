@@ -45,6 +45,13 @@ export class StateManager {
   }
 
   getARenderer(): BoardRenderer {
+    // Find the primary renderer first
+    for (const renderer of this.rendererSet) {
+      if (renderer.isPrimary) {
+        return renderer;
+      }
+    }
+    // Fallback to first renderer if no primary found
     return this.rendererSet.values().next().value;
   }
 
@@ -58,7 +65,9 @@ export class StateManager {
     }
 
     // Mark first renderer as primary (responsible for saving)
-    if (this.rendererSet.size === 1) {
+    // If no primary renderer exists, make this one primary
+    const hasPrimary = Array.from(this.rendererSet).some((r) => r.isPrimary);
+    if (!hasPrimary) {
       renderer.isPrimary = true;
     }
 
@@ -119,8 +128,13 @@ export class StateManager {
       const fileStr = this.parser.boardToMd(this.state);
 
       // Only request save from primary renderer if it has that capability
-      if (renderer.isPrimary && (renderer as any).requestSaveToDisk) {
-        (renderer as any).requestSaveToDisk(fileStr);
+      if (renderer.isPrimary) {
+        if ((renderer as any).requestSaveToDisk) {
+          (renderer as any).requestSaveToDisk(fileStr);
+        } else {
+          // For BoardRenderer (embedded boards), save directly to file
+          this.app.vault.modify(this.file, fileStr);
+        }
       }
 
       // Update data on all renderers
