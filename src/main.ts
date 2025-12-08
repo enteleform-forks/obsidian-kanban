@@ -1,5 +1,6 @@
 import { around } from 'monkey-around';
 import {
+  MarkdownPostProcessorContext,
   MarkdownView,
   Platform,
   Plugin,
@@ -12,6 +13,7 @@ import {
 import { render, unmountComponentAtNode, useEffect, useState } from 'preact/compat';
 
 import { createApp } from './DragDropApp';
+import { KanbanEmbed, KanbanInstance, KanbanLivePreviewEmbed } from './KanbanEmbed';
 import { KanbanView, kanbanIcon, kanbanViewType } from './KanbanView';
 import { KanbanSettings, KanbanSettingsTab } from './Settings';
 import { StateManager } from './StateManager';
@@ -19,11 +21,15 @@ import { DateSuggest, TimeSuggest } from './components/Editor/suggest';
 import { getParentWindow } from './dnd/util/getWindow';
 import { hasFrontmatterKey } from './helpers';
 import { t } from './lang/helpers';
+import { createKanbanViewPlugin } from './livePreview/KanbanViewPlugin';
 import { basicFrontmatter, frontmatterKey } from './parsers/common';
+
+type KanbanEmbedInstance = KanbanEmbed | KanbanLivePreviewEmbed;
 
 interface WindowRegistry {
   viewMap: Map<string, KanbanView>;
-  viewStateReceivers: Array<(views: KanbanView[]) => void>;
+  embedMap: Map<string, KanbanEmbedInstance>;
+  instanceStateReceivers: Array<(instances: KanbanInstance[]) => void>;
   appRoot: HTMLElement;
 }
 
@@ -80,7 +86,7 @@ export default class KanbanPlugin extends Plugin {
   onunload() {
     this.MarkdownEditor = null;
     this.windowRegistry.forEach((reg, win) => {
-      reg.viewStateReceivers.forEach((fn) => fn([]));
+      reg.instanceStateReceivers.forEach((fn) => fn([]));
       this.unmount(win);
     });
 
@@ -130,6 +136,14 @@ export default class KanbanPlugin extends Plugin {
     this.addSettingTab(this.settingsTab);
 
     this.registerView(kanbanViewType, (leaf) => new KanbanView(leaf, this));
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      this.processKanbanTransclusion(el, ctx);
+    });
+    this.registerKanbanEmbedExtension();
+
+    // Register CodeMirror extension for Live Preview kanban embeds
+    this.registerEditorExtension(createKanbanViewPlugin(this));
+
     this.registerMonkeyPatches();
     this.registerCommands();
     this.registerEvents();
@@ -163,7 +177,7 @@ export default class KanbanPlugin extends Plugin {
     return [];
   }
 
-  getKanbanView(id: string, win: Window) {
+  getKanbanView(id: string, win: Window): KanbanView | null {
     const reg = this.windowRegistry.get(win);
 
     if (reg?.viewMap.has(id)) {
@@ -177,6 +191,45 @@ export default class KanbanPlugin extends Plugin {
     }
 
     return null;
+  }
+
+  getKanbanEmbed(id: string, win: Window): KanbanEmbedInstance | null {
+    const reg = this.windowRegistry.get(win);
+
+    if (reg?.embedMap.has(id)) {
+      return reg.embedMap.get(id);
+    }
+
+    for (const reg of this.windowRegistry.values()) {
+      if (reg.embedMap.has(id)) {
+        return reg.embedMap.get(id);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Unified lookup for any kanban instance (View or Embed)
+   * Used by DragDropApp for cross-instance drag operations
+   */
+  getKanbanInstance(scopeId: string, win: Window): KanbanInstance | null {
+    // Try view first
+    const view = this.getKanbanView(scopeId, win);
+    if (view) return view;
+
+    // Then try embed
+    return this.getKanbanEmbed(scopeId, win);
+  }
+
+  /**
+   * Get all kanban instances (views + embeds) for a window
+   */
+  getAllInstances(win: Window): KanbanInstance[] {
+    const reg = this.windowRegistry.get(win);
+    if (!reg) return [];
+
+    return [...Array.from(reg.viewMap.values()), ...Array.from(reg.embedMap.values())];
   }
 
   getStateManager(file: TFile) {
@@ -193,16 +246,44 @@ export default class KanbanPlugin extends Plugin {
     return this.stateManagers.get(view.file);
   }
 
+  /**
+   * Get StateManager by scopeId (extracts file path from scopeId)
+   */
+  getStateManagerFromScopeId(scopeId: string, win: Window): StateManager | null {
+    const instance = this.getKanbanInstance(scopeId, win);
+    if (!instance) return null;
+    return this.stateManagers.get(instance.file);
+  }
+
   useKanbanViews(win: Window): KanbanView[] {
     const [state, setState] = useState(this.getKanbanViews(win));
 
     useEffect(() => {
       const reg = this.windowRegistry.get(win);
+      const receiver = (instances: KanbanInstance[]) => {
+        setState(instances.filter((i): i is KanbanView => 'leaf' in i));
+      };
 
-      reg?.viewStateReceivers.push(setState);
+      reg?.instanceStateReceivers.push(receiver);
 
       return () => {
-        reg?.viewStateReceivers.remove(setState);
+        reg?.instanceStateReceivers.remove(receiver);
+      };
+    }, [win]);
+
+    return state;
+  }
+
+  useAllInstances(win: Window): KanbanInstance[] {
+    const [state, setState] = useState(this.getAllInstances(win));
+
+    useEffect(() => {
+      const reg = this.windowRegistry.get(win);
+
+      reg?.instanceStateReceivers.push(setState);
+
+      return () => {
+        reg?.instanceStateReceivers.remove(setState);
       };
     }, [win]);
 
@@ -235,7 +316,36 @@ export default class KanbanPlugin extends Plugin {
       );
     }
 
-    reg.viewStateReceivers.forEach((fn) => fn(this.getKanbanViews(win)));
+    reg.instanceStateReceivers.forEach((fn) => fn(this.getAllInstances(win)));
+  }
+
+  addEmbed(embed: KanbanEmbedInstance, data: string, shouldParseData: boolean) {
+    const win = embed.getWindow();
+    const reg = this.windowRegistry.get(win);
+
+    if (!reg) return;
+    if (!reg.embedMap.has(embed.id)) {
+      reg.embedMap.set(embed.id, embed);
+    }
+
+    const file = embed.file;
+
+    if (this.stateManagers.has(file)) {
+      this.stateManagers.get(file).registerEmbed(embed, data, shouldParseData);
+    } else {
+      this.stateManagers.set(
+        file,
+        new StateManager(
+          this.app,
+          embed,
+          data,
+          () => this.stateManagers.delete(file),
+          () => this.settings
+        )
+      );
+    }
+
+    reg.instanceStateReceivers.forEach((fn) => fn(this.getAllInstances(win)));
   }
 
   removeView(view: KanbanView) {
@@ -254,7 +364,27 @@ export default class KanbanPlugin extends Plugin {
 
     if (this.stateManagers.has(file)) {
       this.stateManagers.get(file).unregisterView(view);
-      reg.viewStateReceivers.forEach((fn) => fn(this.getKanbanViews(win)));
+      reg.instanceStateReceivers.forEach((fn) => fn(this.getAllInstances(win)));
+    }
+  }
+
+  removeEmbed(embed: KanbanEmbedInstance) {
+    const entry = Array.from(this.windowRegistry.entries()).find(([, reg]) => {
+      return reg.embedMap.has(embed.id);
+    });
+
+    if (!entry) return;
+
+    const [win, reg] = entry;
+    const file = embed.file;
+
+    if (reg.embedMap.has(embed.id)) {
+      reg.embedMap.delete(embed.id);
+    }
+
+    if (this.stateManagers.has(file)) {
+      this.stateManagers.get(file).unregisterEmbed(embed);
+      reg.instanceStateReceivers.forEach((fn) => fn(this.getAllInstances(win)));
     }
   }
 
@@ -280,6 +410,74 @@ export default class KanbanPlugin extends Plugin {
     }
   }
 
+  /**
+   * Register handler for kanban embeds in Live Preview.
+   *
+   * In Live Preview, Obsidian uses the embedRegistry to create embed components.
+   * We intercept this by wrapping the factory function to return our embed for kanban files.
+   */
+  registerKanbanEmbedExtension() {
+    const plugin = this;
+    const embedRegistry = (this.app as any).embedRegistry;
+
+    if (!embedRegistry?.embedByExtension?.md) {
+      console.warn('Kanban: embedRegistry.embedByExtension.md not available');
+      return;
+    }
+
+    const OriginalMdEmbed = embedRegistry.embedByExtension.md;
+
+    // Replace with a factory function that wraps instances
+    embedRegistry.embedByExtension.md = function (
+      ctx: { app: any; containerEl: HTMLElement; displayMode?: boolean },
+      file: TFile,
+      subpath: string
+    ) {
+      // For kanban files, return our custom embed
+      if (file && hasFrontmatterKey(file)) {
+        return new KanbanLivePreviewEmbed(ctx, file, subpath || '', plugin);
+      }
+
+      // For non-kanban files, create the original embed
+      return new OriginalMdEmbed(ctx, file, subpath);
+    };
+
+    // Cleanup on plugin unload
+    this.register(() => {
+      embedRegistry.embedByExtension.md = OriginalMdEmbed;
+    });
+  }
+
+  /**
+   * Process potential kanban transclusions in markdown
+   * Only renders if the source file is different from the kanban file (transclusion)
+   */
+  processKanbanTransclusion(el: HTMLElement, ctx: MarkdownPostProcessorContext) {
+    // Find embedded file references
+    const embeddedItems = el.querySelectorAll('.internal-embed[src]');
+
+    embeddedItems.forEach((embedEl) => {
+      const src = embedEl.getAttribute('src');
+      if (!src) return;
+
+      // Resolve the file
+      const file = this.app.metadataCache.getFirstLinkpathDest(src, ctx.sourcePath);
+      if (!file || !(file instanceof TFile)) return;
+
+      // Check if it's a kanban file
+      if (!hasFrontmatterKey(file)) return;
+
+      // Don't render if we're viewing the kanban file itself (not a transclusion)
+      if (ctx.sourcePath === file.path) return;
+
+      // Create the embed
+      const embed = new KanbanEmbed(embedEl as HTMLElement, file, this, ctx);
+
+      // Register as a MarkdownRenderChild for proper lifecycle
+      ctx.addChild(embed);
+    });
+  }
+
   mount(win: Window) {
     if (this.windowRegistry.has(win)) {
       return;
@@ -289,7 +487,8 @@ export default class KanbanPlugin extends Plugin {
 
     this.windowRegistry.set(win, {
       viewMap: new Map(),
-      viewStateReceivers: [],
+      embedMap: new Map(),
+      instanceStateReceivers: [],
       appRoot: el,
     });
 
@@ -303,15 +502,22 @@ export default class KanbanPlugin extends Plugin {
 
     const reg = this.windowRegistry.get(win);
 
+    // Remove views
     for (const view of reg.viewMap.values()) {
       this.removeView(view);
+    }
+
+    // Remove embeds
+    for (const embed of reg.embedMap.values()) {
+      this.removeEmbed(embed);
     }
 
     unmountComponentAtNode(reg.appRoot);
 
     reg.appRoot.remove();
     reg.viewMap.clear();
-    reg.viewStateReceivers.length = 0;
+    reg.embedMap.clear();
+    reg.instanceStateReceivers.length = 0;
     reg.appRoot = null;
 
     this.windowRegistry.delete(win);

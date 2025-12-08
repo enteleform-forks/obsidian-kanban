@@ -32,14 +32,14 @@ export function allowNewLine(stateManager: StateManager, mod: boolean, shift: bo
   return stateManager.getSetting('new-line-trigger') === 'enter' ? !(mod || shift) : mod || shift;
 }
 
-function getEditorAppProxy(view: KanbanView) {
-  return new Proxy(view.app, {
+function getEditorAppProxy(app: any) {
+  return new Proxy(app, {
     get(target, prop, reveiver) {
       if (prop === 'vault') {
-        return new Proxy(view.app.vault, {
+        return new Proxy(app.vault, {
           get(target, prop, reveiver) {
             if (prop === 'config') {
-              return new Proxy((view.app.vault as any).config, {
+              return new Proxy((app.vault as any).config, {
                 get(target, prop, reveiver) {
                   if (['showLineNumber', 'foldHeading', 'foldIndent'].includes(prop as string)) {
                     return false;
@@ -58,11 +58,12 @@ function getEditorAppProxy(view: KanbanView) {
 }
 
 function getMarkdownController(
-  view: KanbanView,
+  view: KanbanView | null,
+  stateManager: StateManager,
   getEditor: () => ObsidianEditor
 ): Record<any, any> {
   return {
-    app: view.app,
+    app: stateManager.app,
     showSearch: noop,
     toggleMode: noop,
     onMarkdownScroll: noop,
@@ -73,10 +74,10 @@ function getMarkdownController(
       return getEditor();
     },
     get file() {
-      return view.file;
+      return view?.file ?? stateManager.file;
     },
     get path() {
-      return view.file.path;
+      return view?.file?.path ?? stateManager.file.path;
     },
   };
 }
@@ -107,12 +108,29 @@ export function MarkdownEditor({
   value,
   placeholder,
 }: MarkdownEditorProps) {
-  const { view, stateManager } = useContext(KanbanContext);
+  const ctx = useContext(KanbanContext);
+  const { stateManager, containerEl, isEmbed } = ctx;
   const elRef = useRef<HTMLDivElement>();
   const internalRef = useRef<EditorView>();
 
+  // Get view if available (for views or if a view exists alongside embeds)
+  const view = stateManager.getAView();
+
+  // Get plugin - try view first, then fall back to embed
+  const plugin = view?.plugin ?? stateManager.getAnEmbed()?.plugin;
+
+  // For editor operations, we need either a view or can create a minimal context for embeds
+  const instance = stateManager.getAnInstance();
+
   useEffect(() => {
-    class Editor extends view.plugin.MarkdownEditor {
+    // Need plugin with MarkdownEditor class and some instance to work with
+    if (!plugin?.MarkdownEditor || !instance) return;
+
+    // For embed-only scenarios, we need to handle the case where no view exists
+    // The contentEl for mobile class toggling comes from containerEl in that case
+    const effectiveContentEl = view?.contentEl ?? containerEl;
+
+    class Editor extends plugin.MarkdownEditor {
       isKanbanEditor = true;
 
       showTasksPluginAutoSuggest(
@@ -140,23 +158,25 @@ export function MarkdownEditor({
           Prec.highest(
             EditorView.domEventHandlers({
               focus: (evt) => {
-                view.activeEditor = this.owner;
+                if (view) {
+                  view.activeEditor = this.owner;
+                }
                 if (Platform.isMobile) {
-                  view.contentEl.addClass('is-mobile-editing');
+                  effectiveContentEl?.addClass('is-mobile-editing');
                 }
 
                 evt.win.setTimeout(() => {
                   this.app.workspace.activeEditor = this.owner;
                   if (Platform.isMobile) {
-                    this.app.mobileToolbar.update();
+                    this.app.mobileToolbar?.update();
                   }
                 });
                 return true;
               },
               blur: () => {
                 if (Platform.isMobile) {
-                  view.contentEl.removeClass('is-mobile-editing');
-                  this.app.mobileToolbar.update();
+                  effectiveContentEl?.removeClass('is-mobile-editing');
+                  this.app.mobileToolbar?.update();
                 }
                 return true;
               },
@@ -217,9 +237,9 @@ export function MarkdownEditor({
       }
     }
 
-    const controller = getMarkdownController(view, () => editor.editor);
-    const app = getEditorAppProxy(view);
-    const editor = view.plugin.addChild(new (Editor as any)(app, elRef.current, controller));
+    const controller = getMarkdownController(view, stateManager, () => editor.editor);
+    const app = getEditorAppProxy(stateManager.app);
+    const editor = plugin.addChild(new (Editor as any)(app, elRef.current, controller));
     const cm: EditorView = editor.cm;
 
     internalRef.current = cm;
@@ -250,21 +270,21 @@ export function MarkdownEditor({
       if (Platform.isMobile) {
         cm.dom.win.removeEventListener('keyboardDidShow', onShow);
 
-        if (view.activeEditor === controller) {
+        if (view?.activeEditor === controller) {
           view.activeEditor = null;
         }
 
         if (app.workspace.activeEditor === controller) {
           app.workspace.activeEditor = null;
-          (app as any).mobileToolbar.update();
-          view.contentEl.removeClass('is-mobile-editing');
+          (app as any).mobileToolbar?.update();
+          effectiveContentEl?.removeClass('is-mobile-editing');
         }
       }
-      view.plugin.removeChild(editor);
+      plugin.removeChild(editor);
       internalRef.current = null;
       if (editorRef) editorRef.current = null;
     };
-  }, []);
+  }, [instance, plugin]);
 
   const cls = ['cm-table-widget'];
   if (className) cls.push(className);

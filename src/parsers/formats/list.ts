@@ -193,10 +193,10 @@ export function listItemToItemData(stateManager: StateManager, md: string, item:
 
   itemData.title = preprocessTitle(stateManager, dedentNewLines(executeDeletion(title)));
 
-  const firstLineEnd = itemData.title.indexOf('\n');
-  const inlineFields = extractInlineFields(itemData.title, true);
+  const firstLineEnd = itemData.title?.indexOf('\n') ?? -1;
+  const inlineFields = extractInlineFields(itemData.title || '', true);
 
-  if (inlineFields?.length) {
+  if (inlineFields?.length && itemData.metadata) {
     const inlineMetadata = (itemData.metadata.inlineMetadata = inlineFields.reduce((acc, curr) => {
       if (!taskFields.has(curr.key)) acc.push(curr);
       else if (firstLineEnd <= 0 || curr.end < firstLineEnd) acc.push(curr);
@@ -222,7 +222,7 @@ export function listItemToItemData(stateManager: StateManager, md: string, item:
     }
   }
 
-  itemData.metadata.tags?.sort(defaultSort);
+  itemData.metadata?.tags?.sort(defaultSort);
 
   return itemData;
 }

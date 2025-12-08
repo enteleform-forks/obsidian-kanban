@@ -102,12 +102,12 @@ export function getDateFromObj(v: any, stateManager: StateManager) {
   return null;
 }
 
-export function getLinkFromObj(v: any, view: KanbanView) {
+export function getLinkFromObj(v: any, sourcePath: string) {
   if (typeof v !== 'object' || !v.path) return null;
 
   const file = app.vault.getAbstractFileByPath(v.path);
   if (file && file instanceof TFile) {
-    const link = app.fileManager.generateMarkdownLink(file, view.file.path, v.subpath, v.display);
+    const link = app.fileManager.generateMarkdownLink(file, sourcePath, v.subpath, v.display);
     return `${v.embed && link[0] !== '!' ? '!' : ''}${link}`;
   }
 
@@ -148,11 +148,11 @@ export function pageDataToString(data: PageData, stateManager: StateManager): st
 }
 
 export function MetadataValue({ data, dateLabel, searchQuery }: MetadataValueProps) {
-  const { view, stateManager } = useContext(KanbanContext);
+  const { stateManager, filePath } = useContext(KanbanContext);
   const getDateColor = useGetDateColorFn(stateManager);
 
   const renderChild = (v: any, sep?: string) => {
-    const link = getLinkFromObj(v, view);
+    const link = getLinkFromObj(v, filePath);
     const date = getDate(v);
     const str = anyToString(v, stateManager);
     const isMatch = searchQuery && str.toLocaleLowerCase().contains(searchQuery);

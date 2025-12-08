@@ -2,10 +2,9 @@
 import classcat from 'classcat';
 import Mark from 'mark.js';
 import moment from 'moment';
-import { Component, MarkdownRenderer as ObsidianRenderer, getLinkpath } from 'obsidian';
+import { App, Component, MarkdownRenderer as ObsidianRenderer, getLinkpath } from 'obsidian';
 import { CSSProperties, memo, useEffect, useRef } from 'preact/compat';
 import { useContext } from 'preact/hooks';
-import { KanbanView } from 'src/KanbanView';
 import { DndManagerContext, EntityManagerContext } from 'src/dnd/components/context';
 import { PromiseCapability } from 'src/helpers/util';
 
@@ -55,6 +54,15 @@ function colorizeDates(wrapperEl: HTMLElement, getDateColor: (date: moment.Momen
   });
 }
 
+/**
+ * Minimal interface for markdown rendering context.
+ * Can be satisfied by KanbanView or a simple object for embeds.
+ */
+interface MarkdownRenderContext {
+  app: App;
+  file: { path: string };
+}
+
 export class BasicMarkdownRenderer extends Component {
   containerEl: HTMLElement;
   wrapperEl: HTMLElement;
@@ -69,7 +77,7 @@ export class BasicMarkdownRenderer extends Component {
   lastRefHeight = -1;
 
   constructor(
-    public view: KanbanView,
+    public context: MarkdownRenderContext,
     public markdown: string
   ) {
     super();
@@ -89,15 +97,15 @@ export class BasicMarkdownRenderer extends Component {
     this.containerEl.empty();
 
     await ObsidianRenderer.render(
-      this.view.app,
+      this.context.app,
       this.markdown,
       this.containerEl,
-      this.view.file.path,
+      this.context.file.path,
       this
     );
 
     this.renderCapability.resolve();
-    if (!(this.view as any)?._loaded || !(this as any)._loaded) return;
+    if (!(this.context as any)?._loaded || !(this as any)._loaded) return;
 
     const { containerEl } = this;
 
@@ -199,14 +207,14 @@ export class BasicMarkdownRenderer extends Component {
   }
 
   resolveLinks() {
-    const { containerEl, view } = this;
+    const { containerEl, context } = this;
     const internalLinkEls = containerEl.findAll('a.internal-link');
     for (const internalLinkEl of internalLinkEls) {
       const href = this.getInternalLinkHref(internalLinkEl);
       if (!href) continue;
 
       const path = getLinkpath(href);
-      const file = view.app.metadataCache.getFirstLinkpathDest(path, view.file.path);
+      const file = context.app.metadataCache.getFirstLinkpathDest(path, context.file.path);
       internalLinkEl.toggleClass('is-unresolved', !file);
     }
   }
@@ -225,13 +233,23 @@ export const MarkdownRenderer = memo(function MarkdownPreviewRenderer({
   searchQuery,
   ...divProps
 }: MarkdownRendererProps) {
-  const { view, stateManager } = useContext(KanbanContext);
+  const { stateManager, isEmbed } = useContext(KanbanContext);
   const entityManager = useContext(EntityManagerContext);
   const dndManager = useContext(DndManagerContext);
   const sortContext = useContext(SortContext);
   const intersectionContext = useContext(IntersectionObserverContext);
   const getTagColor = useGetTagColorFn(stateManager);
   const getDateColor = useGetDateColorFn(stateManager);
+
+  // Get view for preview cache access - only use for non-embeds
+  // Embeds should NOT share the view's previewCache as they have separate DOM trees
+  const view = isEmbed ? null : stateManager.getAView();
+
+  // Create a render context - works for both views and embeds
+  const renderContext: MarkdownRenderContext = {
+    app: stateManager.app,
+    file: stateManager.file,
+  };
 
   const renderer = useRef<BasicMarkdownRenderer>();
   const elRef = useRef<HTMLDivElement>();
@@ -279,7 +297,8 @@ export const MarkdownRenderer = memo(function MarkdownPreviewRenderer({
       }
     };
 
-    if (entityId && view.previewCache.has(entityId)) {
+    // Use preview cache if view exists (not embed) and has cached preview
+    if (view && entityId && view.previewCache.has(entityId)) {
       const preview = view.previewCache.get(entityId);
 
       renderer.current = preview;
@@ -289,11 +308,19 @@ export const MarkdownRenderer = memo(function MarkdownPreviewRenderer({
       return () => entityManager?.emitter.off('visibility-change', onVisibilityChange);
     }
 
-    const markdownRenderer = new BasicMarkdownRenderer(view, markdownString);
+    const markdownRenderer = new BasicMarkdownRenderer(renderContext, markdownString);
     markdownRenderer.wrapperEl = elRef.current;
 
-    const preview = (renderer.current = view.addChild(markdownRenderer));
-    if (entityId) view.previewCache.set(entityId, preview);
+    // For views, add as child and cache. For embeds, just track locally.
+    let preview: BasicMarkdownRenderer;
+    if (view) {
+      preview = renderer.current = view.addChild(markdownRenderer);
+      if (entityId) view.previewCache.set(entityId, preview);
+    } else {
+      // For embeds, just load the renderer directly
+      preview = renderer.current = markdownRenderer;
+      markdownRenderer.load();
+    }
 
     elRef.current.empty();
     elRef.current.append(preview.containerEl);
@@ -305,8 +332,12 @@ export const MarkdownRenderer = memo(function MarkdownPreviewRenderer({
     return () => {
       renderer.current?.renderCapability.resolve();
       entityManager?.emitter.off('visibility-change', onVisibilityChange);
+      // For embeds, unload the renderer manually
+      if (!view && renderer.current) {
+        renderer.current.unload();
+      }
     };
-  }, [view, entityId, entityManager]);
+  }, [view, entityId, entityManager, renderContext]);
 
   // Respond to changes to the markdown string
   useEffect(() => {
@@ -345,7 +376,7 @@ export const MarkdownRenderer = memo(function MarkdownPreviewRenderer({
   }, []);
 
   let styles: CSSProperties | undefined = undefined;
-  if (!renderer.current && view.previewCache.has(entityId)) {
+  if (!renderer.current && view && entityId && view.previewCache.has(entityId)) {
     const preview = view.previewCache.get(entityId);
     if (preview.lastRefHeight > 0) {
       styles = {
@@ -370,9 +401,10 @@ export const MarkdownClonedPreviewRenderer = memo(function MarkdownClonedPreview
   className,
   ...divProps
 }: MarkdownRendererProps) {
-  const { view } = useContext(KanbanContext);
+  const { stateManager } = useContext(KanbanContext);
+  const view = stateManager.getAView();
   const elRef = useRef<HTMLDivElement>();
-  const preview = view.previewCache.get(entityId);
+  const preview = view?.previewCache.get(entityId);
 
   let styles: CSSProperties | undefined = undefined;
   if (preview && preview.lastRefHeight > 0) {

@@ -2,18 +2,18 @@ import animateScrollTo from 'animated-scroll-to';
 import classcat from 'classcat';
 import update from 'immutability-helper';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/compat';
-import { KanbanView } from 'src/KanbanView';
-import { KanbanViewSettings } from 'src/Settings';
-import { StateManager } from 'src/StateManager';
-import { useIsAnythingDragging } from 'src/dnd/components/DragOverlay';
-import { ScrollContainer } from 'src/dnd/components/ScrollContainer';
-import { SortPlaceholder } from 'src/dnd/components/SortPlaceholder';
-import { Sortable } from 'src/dnd/components/Sortable';
-import { createHTMLDndHandlers } from 'src/dnd/managers/DragManager';
-import { t } from 'src/lang/helpers';
 
+import { KanbanEmbed, KanbanLivePreviewEmbed } from '../KanbanEmbed';
+import { KanbanViewSettings } from '../Settings';
+import { StateManager } from '../StateManager';
+import { useIsAnythingDragging } from '../dnd/components/DragOverlay';
 import { DndScope } from '../dnd/components/Scope';
+import { ScrollContainer } from '../dnd/components/ScrollContainer';
+import { SortPlaceholder } from '../dnd/components/SortPlaceholder';
+import { Sortable } from '../dnd/components/Sortable';
+import { createHTMLDndHandlers } from '../dnd/managers/DragManager';
 import { getBoardModifiers } from '../helpers/boardModifiers';
+import { t } from '../lang/helpers';
 import { frontmatterKey } from '../parsers/common';
 import { Icon } from './Icon/Icon';
 import { Lanes } from './Lane/Lane';
@@ -26,9 +26,9 @@ import { DataTypes } from './types';
 const boardScrollTiggers = [DataTypes.Item, DataTypes.Lane];
 const boardAccepts = [DataTypes.Lane];
 
-interface KanbanProps {
+interface EmbedKanbanProps {
   stateManager: StateManager;
-  view: KanbanView;
+  embed: KanbanEmbed | KanbanLivePreviewEmbed;
 }
 
 function getCSSClass(frontmatter: Record<string, any>): string[] {
@@ -47,7 +47,7 @@ function getCSSClass(frontmatter: Record<string, any>): string[] {
   return classes;
 }
 
-export const Kanban = ({ view, stateManager }: KanbanProps) => {
+export const EmbedKanban = ({ embed, stateManager }: EmbedKanbanProps) => {
   const boardData = stateManager.useState();
   const isAnythingDragging = useIsAnythingDragging();
 
@@ -65,7 +65,9 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
   const maxArchiveLength = stateManager.useSetting('max-archive-size');
   const dateColors = stateManager.useSetting('date-colors');
   const tagColors = stateManager.useSetting('tag-colors');
-  const boardView = view.useViewState(frontmatterKey);
+
+  // Use embed's viewSettings directly
+  const boardView = embed.getViewState(frontmatterKey);
 
   const closeLaneForm = useCallback(() => {
     if (boardData?.children.length > 0) {
@@ -113,14 +115,14 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
       setIsLaneFormVisible(true);
     };
 
-    view.emitter.on('hotkey', onSearchHotkey);
-    view.emitter.on('showLaneForm', showLaneForm);
+    embed.emitter.on('hotkey', onSearchHotkey);
+    embed.emitter.on('showLaneForm', showLaneForm);
 
     return () => {
-      view.emitter.off('hotkey', onSearchHotkey);
-      view.emitter.off('showLaneForm', showLaneForm);
+      embed.emitter.off('hotkey', onSearchHotkey);
+      embed.emitter.off('showLaneForm', showLaneForm);
     };
-  }, [view]);
+  }, [embed]);
 
   useEffect(() => {
     if (isSearching) {
@@ -129,7 +131,7 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
   }, [isSearching]);
 
   useEffect(() => {
-    const win = view.getWindow();
+    const win = embed.getWindow();
     const trimmed = searchQuery.trim();
     let id: number;
 
@@ -144,7 +146,7 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
     return () => {
       win.clearTimeout(id);
     };
-  }, [searchQuery, view]);
+  }, [searchQuery, embed]);
 
   useEffect(() => {
     if (maxArchiveLength === undefined || maxArchiveLength === -1) {
@@ -164,42 +166,36 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
     }
   }, [boardData?.data.archive.length, maxArchiveLength]);
 
-  const boardModifiers = useMemo(() => {
-    return getBoardModifiers(
-      {
-        getViewState: (key) => view.getViewState(key),
-        setViewState: (key, val, globalUpdater) => view.setViewState(key, val, globalUpdater),
-      },
-      stateManager
-    );
-  }, [stateManager, view]);
-
   const viewStateAccessor = useMemo(
     () => ({
-      getViewState: <K extends keyof KanbanViewSettings>(key: K) => view.getViewState(key),
+      getViewState: <K extends keyof KanbanViewSettings>(key: K) => embed.getViewState(key),
       setViewState: <K extends keyof KanbanViewSettings>(
         key: K,
         val?: KanbanViewSettings[K],
         globalUpdater?: (old: KanbanViewSettings[K]) => KanbanViewSettings[K]
-      ) => view.setViewState(key, val, globalUpdater),
-      useViewState: <K extends keyof KanbanViewSettings>(key: K) => view.useViewState(key),
+      ) => embed.setViewState(key, val, globalUpdater),
+      useViewState: <K extends keyof KanbanViewSettings>(key: K) => embed.useViewState(key),
     }),
-    [view]
+    [embed]
   );
+
+  const boardModifiers = useMemo(() => {
+    return getBoardModifiers(viewStateAccessor, stateManager);
+  }, [stateManager, viewStateAccessor]);
 
   const kanbanContext = useMemo(() => {
     return {
-      scopeId: view.id,
-      containerEl: view.contentEl,
+      scopeId: embed.id,
+      containerEl: embed.containerEl,
       stateManager,
       boardModifiers,
       filePath,
-      isEmbed: false,
+      isEmbed: true,
       viewStateAccessor,
     };
-  }, [view, stateManager, boardModifiers, filePath, dateColors, tagColors, viewStateAccessor]);
+  }, [embed, stateManager, boardModifiers, filePath, dateColors, tagColors, viewStateAccessor]);
 
-  const html5DragHandlers = createHTMLDndHandlers(stateManager, view.id);
+  const html5DragHandlers = createHTMLDndHandlers(stateManager, embed.id);
 
   if (boardData === null || boardData === undefined)
     return (
@@ -234,13 +230,14 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
   );
 
   return (
-    <DndScope id={view.id}>
+    <DndScope id={embed.id}>
       <KanbanContext.Provider value={kanbanContext}>
         <SearchContext.Provider value={searchValue}>
           <div
             ref={rootRef}
             className={classcat([
               baseClassName,
+              'kanban-embed-container',
               {
                 'something-is-dragging': isAnythingDragging,
               },
@@ -288,7 +285,7 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
               <TableView boardData={boardData} stateManager={stateManager} />
             ) : (
               <ScrollContainer
-                id={view.id}
+                id={embed.id}
                 className={classcat([
                   c('board'),
                   {

@@ -189,8 +189,8 @@ interface ItemsProps {
 
 export const Items = memo(function Items({ isStatic, items, shouldMarkItemsComplete }: ItemsProps) {
   const search = useContext(SearchContext);
-  const { view } = useContext(KanbanContext);
-  const boardView = view.useViewState(frontmatterKey);
+  const { viewStateAccessor } = useContext(KanbanContext);
+  const boardView = viewStateAccessor.useViewState(frontmatterKey);
 
   return (
     <>
