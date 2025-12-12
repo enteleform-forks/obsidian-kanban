@@ -1,6 +1,5 @@
 import update from 'immutability-helper';
-import { Content, List, Parent, Root } from 'mdast';
-import { ListItem } from 'mdast-util-from-markdown/lib';
+import { Content, List, ListItem, Parent, Root } from 'mdast';
 import { toString } from 'mdast-util-to-string';
 import { stringifyYaml } from 'obsidian';
 import { KanbanSettings } from 'src/Settings';
