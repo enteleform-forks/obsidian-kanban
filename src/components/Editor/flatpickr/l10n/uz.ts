@@ -1,5 +1,4 @@
 import { FlatpickrFn } from '../types/instance';
-
 /* Uzbek locals for flatpickr */
 import { CustomLocale } from '../types/locale';
 

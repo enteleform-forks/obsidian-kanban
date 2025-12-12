@@ -1,7 +1,7 @@
 import Choices from 'choices.js';
+import type { InputChoice } from 'choices.js';
 import update from 'immutability-helper';
 import { App, Setting, TFile, TFolder, Vault } from 'obsidian';
-import type { InputChoice } from 'choices.js';
 
 import { KanbanSettings, SettingsManager } from './Settings';
 import { getTemplatePlugins } from './components/helpers';

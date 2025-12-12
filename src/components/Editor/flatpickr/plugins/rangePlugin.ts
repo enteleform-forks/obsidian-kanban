@@ -1,4 +1,5 @@
 import 'obsidian';
+
 import type { Instance } from '../types/instance';
 import { Plugin } from '../types/options';
 

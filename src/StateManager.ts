@@ -55,7 +55,11 @@ export class StateManager {
       this.registerView(initialInstance as KanbanView, initialData, true);
     } else {
       // It's a KanbanEmbed or KanbanLivePreviewEmbed
-      this.registerEmbed(initialInstance as KanbanEmbed | KanbanLivePreviewEmbed, initialData, true);
+      this.registerEmbed(
+        initialInstance as KanbanEmbed | KanbanLivePreviewEmbed,
+        initialData,
+        true
+      );
     }
   }
 
@@ -113,7 +117,11 @@ export class StateManager {
     }
   }
 
-  async registerEmbed(embed: KanbanEmbed | KanbanLivePreviewEmbed, data: string, shouldParseData: boolean) {
+  async registerEmbed(
+    embed: KanbanEmbed | KanbanLivePreviewEmbed,
+    data: string,
+    shouldParseData: boolean
+  ) {
     if (!this.embedSet.has(embed)) {
       this.embedSet.add(embed);
     }

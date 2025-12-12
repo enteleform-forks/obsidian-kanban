@@ -325,6 +325,8 @@ export function isKanbanView(instance: KanbanInstance): instance is KanbanView {
 /**
  * Type guard to check if an instance is a KanbanEmbed
  */
-export function isKanbanEmbed(instance: KanbanInstance): instance is KanbanEmbed | KanbanLivePreviewEmbed {
+export function isKanbanEmbed(
+  instance: KanbanInstance
+): instance is KanbanEmbed | KanbanLivePreviewEmbed {
   return !('leaf' in instance);
 }

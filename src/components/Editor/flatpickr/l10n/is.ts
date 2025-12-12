@@ -1,5 +1,4 @@
 import { FlatpickrFn } from '../types/instance';
-
 /* Icelandic locale for flatpickr */
 import { CustomLocale } from '../types/locale';
 

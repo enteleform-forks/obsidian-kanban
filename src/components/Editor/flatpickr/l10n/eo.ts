@@ -1,5 +1,4 @@
 import { FlatpickrFn } from '../types/instance';
-
 /* Esperanto locals for flatpickr */
 import { CustomLocale } from '../types/locale';
 

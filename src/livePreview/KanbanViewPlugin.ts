@@ -4,7 +4,7 @@ import { StateField } from '@codemirror/state';
 import type { DecorationSet } from '@codemirror/view';
 import { Decoration, EditorView, ViewPlugin, WidgetType } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
-import { editorEditorField, editorInfoField, editorLivePreviewField, TFile } from 'obsidian';
+import { TFile, editorEditorField, editorInfoField, editorLivePreviewField } from 'obsidian';
 
 import { KanbanLivePreviewEmbed } from '../KanbanEmbed';
 import { hasFrontmatterKey } from '../helpers';
@@ -53,10 +53,7 @@ function checkSelectionOverlap(state: any, from: number, to: number): boolean {
  * Finds the full embed range by looking for the start and end formatting nodes
  * around an embed link node.
  */
-function findEmbedRange(
-  state: any,
-  linkNode: SyntaxNode
-): { from: number; to: number } | null {
+function findEmbedRange(state: any, linkNode: SyntaxNode): { from: number; to: number } | null {
   let embedStart: number | null = null;
   let embedEnd: number | null = null;
 

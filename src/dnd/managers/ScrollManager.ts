@@ -211,7 +211,11 @@ export class ScrollManager {
     this.activeScroll.clear();
   };
 
-  handleBeginDragScroll = ({ scrollEntitySide, scrollStrength, scrollEntityId }: ScrollEventData) => {
+  handleBeginDragScroll = ({
+    scrollEntitySide,
+    scrollStrength,
+    scrollEntityId,
+  }: ScrollEventData) => {
     if (!scrollEntityId?.startsWith(this.instanceId)) return;
     if (this.isDoneScrolling(scrollEntitySide)) return;
 
@@ -219,7 +223,11 @@ export class ScrollManager {
     this.handleDragScroll();
   };
 
-  handleUpdateDragScroll = ({ scrollEntitySide, scrollStrength, scrollEntityId }: ScrollEventData) => {
+  handleUpdateDragScroll = ({
+    scrollEntitySide,
+    scrollStrength,
+    scrollEntityId,
+  }: ScrollEventData) => {
     if (!scrollEntityId?.startsWith(this.instanceId)) return;
     if (this.isDoneScrolling(scrollEntitySide)) return;
 
