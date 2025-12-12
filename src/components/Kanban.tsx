@@ -3,6 +3,7 @@ import classcat from 'classcat';
 import update from 'immutability-helper';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/compat';
 import { KanbanView } from 'src/KanbanView';
+import { KanbanViewSettings } from 'src/Settings';
 import { StateManager } from 'src/StateManager';
 import { useIsAnythingDragging } from 'src/dnd/components/DragOverlay';
 import { ScrollContainer } from 'src/dnd/components/ScrollContainer';
@@ -164,19 +165,41 @@ export const Kanban = ({ view, stateManager }: KanbanProps) => {
   }, [boardData?.data.archive.length, maxArchiveLength]);
 
   const boardModifiers = useMemo(() => {
-    return getBoardModifiers(view, stateManager);
+    return getBoardModifiers(
+      {
+        getViewState: (key) => view.getViewState(key),
+        setViewState: (key, val, globalUpdater) => view.setViewState(key, val, globalUpdater),
+      },
+      stateManager
+    );
   }, [stateManager, view]);
+
+  const viewStateAccessor = useMemo(
+    () => ({
+      getViewState: <K extends keyof KanbanViewSettings>(key: K) => view.getViewState(key),
+      setViewState: <K extends keyof KanbanViewSettings>(
+        key: K,
+        val?: KanbanViewSettings[K],
+        globalUpdater?: (old: KanbanViewSettings[K]) => KanbanViewSettings[K]
+      ) => view.setViewState(key, val, globalUpdater),
+      useViewState: <K extends keyof KanbanViewSettings>(key: K) => view.useViewState(key),
+    }),
+    [view]
+  );
 
   const kanbanContext = useMemo(() => {
     return {
-      view,
+      scopeId: view.id,
+      containerEl: view.contentEl,
       stateManager,
       boardModifiers,
       filePath,
+      isEmbed: false,
+      viewStateAccessor,
     };
-  }, [view, stateManager, boardModifiers, filePath, dateColors, tagColors]);
+  }, [view, stateManager, boardModifiers, filePath, dateColors, tagColors, viewStateAccessor]);
 
-  const html5DragHandlers = createHTMLDndHandlers(stateManager);
+  const html5DragHandlers = createHTMLDndHandlers(stateManager, view.id);
 
   if (boardData === null || boardData === undefined)
     return (

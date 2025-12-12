@@ -1,6 +1,5 @@
 import English from './l10n/default';
 import { FPDate, FPHTMLCollection, FPHTMLElement, FPNodeList } from './types/globals';
-
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 
 /* eslint-disable no-empty */

@@ -64,8 +64,8 @@ export function maybeCompleteForMove(
 
   if (updates) {
     const [itemStrings, checkChars, thisIndex] = updates;
-    let next: Item;
-    let replacement: Item;
+    let next: Item | undefined;
+    let replacement: Item | undefined;
 
     itemStrings.forEach((str, i) => {
       if (i === thisIndex) {
@@ -75,7 +75,10 @@ export function maybeCompleteForMove(
       }
     });
 
-    return { next, replacement };
+    // Guard: if next is defined, return it; otherwise fall through to default behavior
+    if (next) {
+      return { next, replacement };
+    }
   }
 
   // It's different, update it

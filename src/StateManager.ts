@@ -2,6 +2,7 @@ import update from 'immutability-helper';
 import { App, TFile, moment } from 'obsidian';
 import { useEffect, useState } from 'preact/compat';
 
+import { KanbanEmbed, KanbanInstance, KanbanLivePreviewEmbed } from './KanbanEmbed';
 import { KanbanView } from './KanbanView';
 import { KanbanSettings, SettingRetrievers } from './Settings';
 import { getDefaultDateFormat, getDefaultTimeFormat } from './components/helpers';
@@ -19,6 +20,7 @@ export class StateManager {
   settingsNotifiers: Map<keyof KanbanSettings, Array<() => void>> = new Map();
 
   viewSet: Set<KanbanView> = new Set();
+  embedSet: Set<KanbanEmbed | KanbanLivePreviewEmbed> = new Set();
   compiledSettings: KanbanSettings = {};
 
   app: App;
@@ -27,24 +29,61 @@ export class StateManager {
 
   parser: BaseFormat;
 
+  // Update queue to prevent race conditions during rapid state updates
+  private updateQueue: Array<{
+    updater: (board: Board) => Board;
+    shouldSave: boolean;
+  }> = [];
+  private isProcessingQueue: boolean = false;
+
   constructor(
     app: App,
-    initialView: KanbanView,
+    initialInstance: KanbanInstance,
     initialData: string,
     onEmpty: () => void,
     getGlobalSettings: () => KanbanSettings
   ) {
     this.app = app;
-    this.file = initialView.file;
+    this.file = initialInstance.file;
     this.onEmpty = onEmpty;
     this.getGlobalSettings = getGlobalSettings;
     this.parser = new ListFormat(this);
 
-    this.registerView(initialView, initialData, true);
+    // Register based on instance type
+    if ('leaf' in initialInstance) {
+      // It's a KanbanView
+      this.registerView(initialInstance as KanbanView, initialData, true);
+    } else {
+      // It's a KanbanEmbed or KanbanLivePreviewEmbed
+      this.registerEmbed(
+        initialInstance as KanbanEmbed | KanbanLivePreviewEmbed,
+        initialData,
+        true
+      );
+    }
   }
 
-  getAView(): KanbanView {
-    return this.viewSet.values().next().value;
+  getAView(): KanbanView | null {
+    // Prefer views over embeds (views are primary for saving)
+    if (this.viewSet.size > 0) {
+      return this.viewSet.values().next().value;
+    }
+    return null;
+  }
+
+  getAnEmbed(): KanbanEmbed | KanbanLivePreviewEmbed | null {
+    if (this.embedSet.size > 0) {
+      return this.embedSet.values().next().value;
+    }
+    return null;
+  }
+
+  getAnInstance(): KanbanInstance | null {
+    // Get any instance (view preferred, then embed)
+    const view = this.getAView();
+    if (view) return view;
+
+    return this.getAnEmbed();
   }
 
   hasError(): boolean {
@@ -72,9 +111,49 @@ export class StateManager {
     if (this.viewSet.has(view)) {
       this.viewSet.delete(view);
 
-      if (this.viewSet.size === 0) {
+      if (this.viewSet.size === 0 && this.embedSet.size === 0) {
         this.onEmpty();
       }
+    }
+  }
+
+  async registerEmbed(
+    embed: KanbanEmbed | KanbanLivePreviewEmbed,
+    data: string,
+    shouldParseData: boolean
+  ) {
+    if (!this.embedSet.has(embed)) {
+      this.embedSet.add(embed);
+    }
+
+    // This helps delay blocking the UI until the loading indicator is displayed
+    await new Promise((res) => activeWindow.setTimeout(res, 10));
+
+    // Only parse if no existing state AND shouldParseData is true
+    if (shouldParseData && !this.state) {
+      await this.newBoardForEmbed(embed, data);
+    }
+    // If state exists, just use it (no parsing needed)
+
+    embed.populateViewState(this.state?.data.settings || {});
+  }
+
+  unregisterEmbed(embed: KanbanEmbed | KanbanLivePreviewEmbed) {
+    if (this.embedSet.has(embed)) {
+      this.embedSet.delete(embed);
+
+      if (this.viewSet.size === 0 && this.embedSet.size === 0) {
+        this.onEmpty();
+      }
+    }
+  }
+
+  async newBoardForEmbed(embed: KanbanEmbed | KanbanLivePreviewEmbed, md: string) {
+    try {
+      const board = this.getParsedBoard(md);
+      this.setState(board, false);
+    } catch (e) {
+      this.setError(e);
     }
   }
 
@@ -101,16 +180,27 @@ export class StateManager {
       return;
     }
 
+    const fileStr = this.parser.boardToMd(this.state);
     const view = this.getAView();
 
     if (view) {
-      const fileStr = this.parser.boardToMd(this.state);
+      // Use view's save mechanism (handles debouncing, etc.)
       view.requestSaveToDisk(fileStr);
-
-      this.viewSet.forEach((view) => {
-        view.data = fileStr;
-      });
+    } else if (this.embedSet.size > 0) {
+      // No view open, but we have embeds - save directly via vault API
+      // This ensures changes from transcludes are persisted
+      this.app.vault.modify(this.file, fileStr);
     }
+
+    // Update all views
+    this.viewSet.forEach((view) => {
+      view.data = fileStr;
+    });
+
+    // Update all embeds
+    this.embedSet.forEach((embed) => {
+      embed.updateData(fileStr);
+    });
   }
 
   softRefresh() {
@@ -136,47 +226,103 @@ export class StateManager {
   }
 
   setState(state: Board | ((board: Board) => Board), shouldSave: boolean = true) {
+    if (typeof state === 'function') {
+      // Queue the updater function to ensure sequential processing
+      this.updateQueue.push({ updater: state, shouldSave });
+      this.processUpdateQueue();
+    } else {
+      // Direct state assignment (used during initialization/parsing)
+      // Still needs to go through the queue to maintain ordering
+      this.updateQueue.push({ updater: () => state, shouldSave });
+      this.processUpdateQueue();
+    }
+  }
+
+  /**
+   * Process all queued state updates sequentially.
+   * Each update receives the result of all previous updates, preventing race conditions.
+   */
+  private processUpdateQueue() {
+    // Prevent re-entrant processing
+    if (this.isProcessingQueue) {
+      return;
+    }
+
+    this.isProcessingQueue = true;
+
     try {
+      let needsSave = false;
       const oldSettings = this.state?.data.settings;
-      const newState = typeof state === 'function' ? state(this.state) : state;
-      const newSettings = newState?.data.settings;
+      let settingsChanged = false;
+      let newSettings: KanbanSettings | undefined;
 
-      if (oldSettings && newSettings && shouldRefreshBoard(oldSettings, newSettings)) {
-        this.state = update(this.state, {
-          data: {
-            settings: {
-              $set: newSettings,
-            },
-          },
-        });
-        this.compileSettings();
-        this.state = this.parser.reparseBoard();
-      } else {
-        this.state = newState;
-        this.compileSettings();
-      }
+      // Process all queued updates sequentially
+      while (this.updateQueue.length > 0) {
+        const { updater, shouldSave } = this.updateQueue.shift()!;
 
-      this.viewSet.forEach((view) => {
-        view.initHeaderButtons();
-        view.validatePreviewCache(newState);
-      });
+        try {
+          const newState = updater(this.state);
 
-      if (shouldSave) {
-        this.saveToDisk();
-      }
-
-      this.stateReceivers.forEach((receiver) => receiver(this.state));
-
-      if (oldSettings !== newSettings && newSettings) {
-        this.settingsNotifiers.forEach((notifiers, key) => {
-          if ((!oldSettings && newSettings) || oldSettings[key] !== newSettings[key]) {
-            notifiers.forEach((fn) => fn());
+          if (!newState) {
+            console.warn('StateManager: updater returned null/undefined state, skipping');
+            continue;
           }
-        });
+
+          newSettings = newState.data?.settings;
+
+          if (oldSettings && newSettings && shouldRefreshBoard(oldSettings, newSettings)) {
+            this.state = update(this.state, {
+              data: {
+                settings: {
+                  $set: newSettings,
+                },
+              },
+            });
+            this.compileSettings();
+            this.state = this.parser.reparseBoard();
+            settingsChanged = true;
+          } else {
+            this.state = newState;
+            this.compileSettings();
+          }
+
+          if (shouldSave) {
+            needsSave = true;
+          }
+        } catch (e) {
+          console.error('StateManager: error processing update', e);
+          this.setError(e);
+        }
       }
-    } catch (e) {
-      console.error(e);
-      this.setError(e);
+
+      // Batch UI updates and save after all state updates are applied
+      if (this.state) {
+        this.viewSet.forEach((view) => {
+          view.initHeaderButtons();
+          view.validatePreviewCache(this.state);
+        });
+
+        if (needsSave) {
+          this.saveToDisk();
+        }
+
+        this.stateReceivers.forEach((receiver) => receiver(this.state));
+
+        if (settingsChanged && oldSettings !== newSettings && newSettings) {
+          this.settingsNotifiers.forEach((notifiers, key) => {
+            if ((!oldSettings && newSettings) || oldSettings[key] !== newSettings[key]) {
+              notifiers.forEach((fn) => fn());
+            }
+          });
+        }
+      }
+    } finally {
+      this.isProcessingQueue = false;
+
+      // Check if new updates were queued during processing
+      if (this.updateQueue.length > 0) {
+        this.processUpdateQueue();
+      }
     }
   }
 
@@ -355,7 +501,9 @@ export class StateManager {
 
   async reparseBoardFromMd() {
     try {
-      this.setState(this.getParsedBoard(this.getAView().data), false);
+      const instance = this.getAnInstance();
+      if (!instance) return;
+      this.setState(this.getParsedBoard(instance.data), false);
     } catch (e) {
       console.error(e);
       this.setError(e);

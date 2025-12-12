@@ -1,3 +1,6 @@
+# Project
+._Temporary
+
 # Intellij
 *.iml
 .idea
@@ -11,7 +14,6 @@ package-lock.json
 *.js.map
 .env
 yarn*
-dist
 test-vault/
-main.js
-styles.css
+/main.js
+/styles.css

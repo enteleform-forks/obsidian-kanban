@@ -1,5 +1,4 @@
 import { FlatpickrFn } from '../types/instance';
-
 /* Indonesian locals for flatpickr */
 import { CustomLocale } from '../types/locale';
 

@@ -24,7 +24,7 @@ function scrollMonth(fp: Instance) {
 }
 
 function scrollPlugin(): Plugin {
-  return function (fp) {
+  return function (fp: Instance) {
     const monthScroller = scrollMonth(fp);
     return {
       onReady() {

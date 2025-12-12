@@ -1,19 +1,56 @@
 import { createContext } from 'preact/compat';
-import { KanbanView } from 'src/KanbanView';
+import { KanbanViewSettings } from 'src/Settings';
 import { StateManager } from 'src/StateManager';
 import { IntersectionObserverHandler } from 'src/dnd/managers/ScrollManager';
 
 import { BoardModifiers } from '../helpers/boardModifiers';
 import { Item, Lane, LaneSort } from './types';
 
+/**
+ * Interface for view state operations.
+ * Implemented by both KanbanView and KanbanEmbed.
+ */
+export interface ViewStateAccessor {
+  getViewState: <K extends keyof KanbanViewSettings>(key: K) => KanbanViewSettings[K];
+  setViewState: <K extends keyof KanbanViewSettings>(
+    key: K,
+    val?: KanbanViewSettings[K],
+    globalUpdater?: (old: KanbanViewSettings[K]) => KanbanViewSettings[K]
+  ) => void;
+  useViewState: <K extends keyof KanbanViewSettings>(key: K) => KanbanViewSettings[K];
+}
+
 export interface KanbanContextProps {
   filePath?: string;
   stateManager: StateManager;
   boardModifiers: BoardModifiers;
-  view: KanbanView;
+  scopeId: string;
+  containerEl: HTMLElement;
+  isEmbed?: boolean;
+  viewStateAccessor: ViewStateAccessor;
 }
 
 export const KanbanContext = createContext<KanbanContextProps>(null);
+
+/**
+ * Helper to get the plugin from stateManager for MarkdownEditor instantiation.
+ * Works for both Views and Embeds since plugin is accessed through stateManager.app.
+ */
+export function getPluginFromContext(ctx: KanbanContextProps) {
+  // First try to get plugin from a view if available
+  const view = ctx.stateManager.getAView();
+  if (view?.plugin) {
+    return view.plugin;
+  }
+
+  // Fallback: get plugin from any embed
+  const embed = ctx.stateManager.getAnEmbed?.();
+  if (embed?.plugin) {
+    return embed.plugin;
+  }
+
+  return null;
+}
 
 export interface SearchContextProps {
   query: string;

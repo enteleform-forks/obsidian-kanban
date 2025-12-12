@@ -76,7 +76,7 @@ export function useSettingsMenu({ setEditState, path, lane }: UseSettingsMenuPar
     let canSortTags = false;
 
     lane.children.forEach((item) => {
-      const taskData = item.data.metadata.inlineMetadata;
+      const taskData = item.data?.metadata?.inlineMetadata;
       if (taskData) {
         taskData.forEach((m) => {
           if (m.key === 'repeat') return;
@@ -84,8 +84,8 @@ export function useSettingsMenu({ setEditState, path, lane }: UseSettingsMenuPar
         });
       }
 
-      if (!canSortDate && item.data.metadata.date) canSortDate = true;
-      if (!canSortTags && item.data.metadata.tags?.length) canSortTags = true;
+      if (!canSortDate && item.data?.metadata?.date) canSortDate = true;
+      if (!canSortTags && item.data?.metadata?.tags?.length) canSortTags = true;
     });
 
     const menu = new Menu()
@@ -290,8 +290,8 @@ export function useSettingsMenu({ setEditState, path, lane }: UseSettingsMenuPar
                 const desc = lane.data.sorted === k + '-asc' ? true : false;
 
                 children.sort((a, b) => {
-                  const valA = a.data.metadata.inlineMetadata?.find((m) => m.key === k);
-                  const valB = b.data.metadata.inlineMetadata?.find((m) => m.key === k);
+                  const valA = a.data?.metadata?.inlineMetadata?.find((m) => m.key === k);
+                  const valB = b.data?.metadata?.inlineMetadata?.find((m) => m.key === k);
 
                   if (valA === undefined && valB === undefined) return 0;
                   if (valA === undefined) return 1;

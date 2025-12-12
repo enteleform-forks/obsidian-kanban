@@ -65,7 +65,8 @@ export function useTableData(board: Board, stateManager: StateManager): TableDat
       const lane = lanes[i];
       for (let j = 0, len = lane.children.length; j < len; j++) {
         const item = lane.children[j];
-        const itemMetadata = item.data.metadata;
+        const itemMetadata = item.data?.metadata;
+        if (!itemMetadata) return;
         const itemfileMetadata = itemMetadata.fileMetadata || {};
         const fileMetaOrder = itemMetadata.fileMetadataOrder || [];
         const itemInlineMetadata = itemMetadata.inlineMetadata;
@@ -276,7 +277,7 @@ export function useTableColumns(boardData: Board, stateManager: StateManager) {
       columns.push(
         columnHelper.accessor(
           (row) => {
-            const data = row.item.data.metadata.inlineMetadata?.find((m) => m.key === key);
+            const data = row.item.data?.metadata?.inlineMetadata?.find((m) => m.key === key);
             if (data) return data;
             return null;
           },

@@ -2,7 +2,7 @@ import classcat from 'classcat';
 import update from 'immutability-helper';
 import { JSX, createPortal, memo, useCallback, useMemo } from 'preact/compat';
 
-import { KanbanView } from './KanbanView';
+import { KanbanInstance, isKanbanView } from './KanbanEmbed';
 import { DraggableItem } from './components/Item/Item';
 import { DraggableLane } from './components/Lane/Lane';
 import { KanbanContext } from './components/context';
@@ -31,13 +31,17 @@ export function createApp(win: Window, plugin: KanbanPlugin) {
   return <DragDropApp win={win} plugin={plugin} />;
 }
 
-const View = memo(function View({ view }: { view: KanbanView }) {
-  return createPortal(view.getPortal(), view.contentEl);
+const Instance = memo(function Instance({ instance }: { instance: KanbanInstance }) {
+  // Both View and Embed have containerEl (View has contentEl which inherits from ItemView)
+  const container = isKanbanView(instance) ? instance.contentEl : instance.containerEl;
+  return createPortal(instance.getPortal(), container);
 });
 
 export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin }) {
-  const views = plugin.useKanbanViews(win);
-  const portals: JSX.Element[] = views.map((view) => <View key={view.id} view={view} />);
+  const instances = plugin.useAllInstances(win);
+  const portals: JSX.Element[] = instances.map((instance) => (
+    <Instance key={instance.id} instance={instance} />
+  ));
 
   const handleDrop = useCallback(
     (dragEntity: Entity, dropEntity: Entity) => {
@@ -47,7 +51,9 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
 
       if (dragEntity.scopeId === 'htmldnd') {
         const data = dragEntity.getData();
-        const stateManager = plugin.getStateManagerFromViewID(data.viewId, data.win);
+        const stateManager = plugin.getStateManagerFromScopeId(data.viewId, data.win);
+        if (!stateManager) return;
+
         const dropPath = dropEntity.getPath();
         const destinationParent = getEntityFromPath(stateManager.state, dropPath.slice(0, -1));
 
@@ -90,8 +96,9 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
         return;
       }
 
-      const dragPath = dragEntity.getPath();
-      const dropPath = dropEntity.getPath();
+      // Clone paths to prevent mutation issues during rapid operations
+      const dragPath = [...dragEntity.getPath()];
+      const dropPath = [...dropEntity.getPath()];
       const dragEntityData = dragEntity.getData();
       const dropEntityData = dropEntity.getData();
       const [, sourceFile] = dragEntity.scopeId.split(':::');
@@ -100,21 +107,22 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
       const inDropArea =
         dropEntityData.acceptsSort && !dropEntityData.acceptsSort.includes(dragEntityData.type);
 
-      // Same board
+      // Same board (file)
       if (sourceFile === destinationFile) {
-        const view = plugin.getKanbanView(dragEntity.scopeId, dragEntityData.win);
-        const stateManager = plugin.stateManagers.get(view.file);
+        const instance = plugin.getKanbanInstance(dragEntity.scopeId, dragEntityData.win);
+        if (!instance) return;
+        const stateManager = plugin.stateManagers.get(instance.file);
+        if (!stateManager) return;
 
-        if (inDropArea) {
-          dropPath.push(0);
-        }
+        // Create a local copy of dropPath for this operation
+        const finalDropPath = inDropArea ? [...dropPath, 0] : dropPath;
 
         return stateManager.setState((board) => {
           const entity = getEntityFromPath(board, dragPath);
           const newBoard: Board = moveEntity(
             board,
             dragPath,
-            dropPath,
+            finalDropPath,
             (entity) => {
               if (entity.type === DataTypes.Item) {
                 const { next } = maybeCompleteForMove(
@@ -123,7 +131,7 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
                   dragPath,
                   stateManager,
                   board,
-                  dropPath,
+                  finalDropPath,
                   entity
                 );
                 return next;
@@ -138,7 +146,7 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
                   dragPath,
                   stateManager,
                   board,
-                  dropPath,
+                  finalDropPath,
                   entity
                 );
                 return replacement;
@@ -148,18 +156,18 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
 
           if (entity.type === DataTypes.Lane) {
             const from = dragPath.last();
-            let to = dropPath.last();
+            let to = finalDropPath.last();
 
             if (from < to) to -= 1;
 
-            const collapsedState = view.getViewState('list-collapse');
+            const collapsedState = instance.getViewState('list-collapse');
             const op = (collapsedState: boolean[]) => {
               const newState = [...collapsedState];
               newState.splice(to, 0, newState.splice(from, 1)[0]);
               return newState;
             };
 
-            view.setViewState('list-collapse', undefined, op);
+            instance.setViewState('list-collapse', undefined, op);
 
             return update<Board>(newBoard, {
               data: { settings: { 'list-collapse': { $set: op(collapsedState) } } },
@@ -167,7 +175,7 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
           }
 
           // Remove sorting in the destination lane
-          const destinationParentPath = dropPath.slice(0, -1);
+          const destinationParentPath = finalDropPath.slice(0, -1);
           const destinationParent = getEntityFromPath(board, destinationParentPath);
 
           if (destinationParent?.data?.sorted !== undefined) {
@@ -182,81 +190,119 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
         });
       }
 
-      const sourceView = plugin.getKanbanView(dragEntity.scopeId, dragEntityData.win);
-      const sourceStateManager = plugin.stateManagers.get(sourceView.file);
-      const destinationView = plugin.getKanbanView(dropEntity.scopeId, dropEntityData.win);
-      const destinationStateManager = plugin.stateManagers.get(destinationView.file);
+      // Cross-board (different files) drag
+      const sourceInstance = plugin.getKanbanInstance(dragEntity.scopeId, dragEntityData.win);
+      const destinationInstance = plugin.getKanbanInstance(dropEntity.scopeId, dropEntityData.win);
+      if (!sourceInstance || !destinationInstance) return;
 
-      sourceStateManager.setState((sourceBoard) => {
-        const entity = getEntityFromPath(sourceBoard, dragPath);
-        let replacementEntity: Nestable;
+      const sourceStateManager = plugin.stateManagers.get(sourceInstance.file);
+      const destinationStateManager = plugin.stateManagers.get(destinationInstance.file);
+      if (!sourceStateManager || !destinationStateManager) return;
 
-        destinationStateManager.setState((destinationBoard) => {
-          if (inDropArea) {
-            const parent = getEntityFromPath(destinationStateManager.state, dropPath);
-            const shouldAppend =
-              (destinationStateManager.getSetting('new-card-insertion-method') || 'append') ===
-              'append';
+      // For cross-board transfers, we need to extract the entity BEFORE any state updates.
+      // This prevents race conditions where rapid operations could read stale state.
+      // We capture everything we need synchronously, then apply both updates.
 
-            if (shouldAppend) dropPath.push(parent.children.length);
-            else dropPath.push(0);
-          }
+      // Step 1: Capture entity from source board SYNCHRONOUSLY before any updates
+      const sourceBoard = sourceStateManager.state;
+      const entity = getEntityFromPath(sourceBoard, dragPath);
 
-          const toInsert: Nestable[] = [];
+      if (!entity || !entity.data) {
+        console.warn('Cross-board drag: entity not found at path', dragPath);
+        return;
+      }
 
-          if (entity.type === DataTypes.Item) {
-            const { next, replacement } = maybeCompleteForMove(
-              sourceStateManager,
-              sourceBoard,
-              dragPath,
-              destinationStateManager,
-              destinationBoard,
-              dropPath,
-              entity
-            );
-            replacementEntity = replacement;
-            toInsert.push(next);
-          } else {
-            toInsert.push(entity);
-          }
+      // Store the entity ID for verification later
+      const entityId = entity.id;
 
-          if (entity.type === DataTypes.Lane) {
-            const collapsedState = destinationView.getViewState('list-collapse');
-            const val = sourceView.getViewState('list-collapse')[dragPath.last()];
-            const op = (collapsedState: boolean[]) => {
-              const newState = [...collapsedState];
-              newState.splice(dropPath.last(), 0, val);
-              return newState;
-            };
+      // Pre-calculate the final drop path
+      const destinationBoard = destinationStateManager.state;
+      let finalDropPath = [...dropPath];
+      if (inDropArea) {
+        const parent = getEntityFromPath(destinationBoard, dropPath);
+        const shouldAppend =
+          (destinationStateManager.getSetting('new-card-insertion-method') || 'append') ===
+          'append';
 
-            destinationView.setViewState('list-collapse', undefined, op);
+        if (shouldAppend) {
+          finalDropPath = [...dropPath, parent.children.length];
+        } else {
+          finalDropPath = [...dropPath, 0];
+        }
+      }
 
-            return update<Board>(insertEntity(destinationBoard, dropPath, toInsert), {
-              data: { settings: { 'list-collapse': { $set: op(collapsedState) } } },
-            });
-          } else {
-            return insertEntity(destinationBoard, dropPath, toInsert);
-          }
-        });
+      // Pre-calculate what to insert and any replacement
+      let toInsert: Nestable;
+      let replacementEntity: Nestable | undefined;
+
+      if (entity.type === DataTypes.Item) {
+        const { next, replacement } = maybeCompleteForMove(
+          sourceStateManager,
+          sourceBoard,
+          dragPath,
+          destinationStateManager,
+          destinationBoard,
+          finalDropPath,
+          entity as Item
+        );
+        // Guard against undefined next (can happen if toggleTask returns unexpected data)
+        toInsert = next || entity;
+        replacementEntity = replacement;
+      } else {
+        toInsert = entity;
+      }
+
+      // Step 2: Remove from source board FIRST
+      // This ensures the card is removed before being added elsewhere,
+      // preventing duplication if the destination insert is slow
+      sourceStateManager.setState((currentSourceBoard) => {
+        // Verify the entity still exists at the expected path
+        const currentEntity = getEntityFromPath(currentSourceBoard, dragPath);
+        if (!currentEntity || currentEntity.id !== entityId) {
+          // Entity was already moved/deleted - skip this update
+          console.warn('Cross-board drag: entity no longer at source path, skipping removal');
+          return currentSourceBoard;
+        }
 
         if (entity.type === DataTypes.Lane) {
-          const collapsedState = sourceView.getViewState('list-collapse');
+          const collapsedState = sourceInstance.getViewState('list-collapse');
           const op = (collapsedState: boolean[]) => {
             const newState = [...collapsedState];
             newState.splice(dragPath.last(), 1);
             return newState;
           };
-          sourceView.setViewState('list-collapse', undefined, op);
+          sourceInstance.setViewState('list-collapse', undefined, op);
 
-          return update<Board>(removeEntity(sourceBoard, dragPath), {
+          return update<Board>(removeEntity(currentSourceBoard, dragPath), {
             data: { settings: { 'list-collapse': { $set: op(collapsedState) } } },
           });
         } else {
-          return removeEntity(sourceBoard, dragPath, replacementEntity);
+          return removeEntity(currentSourceBoard, dragPath, replacementEntity);
+        }
+      });
+
+      // Step 3: Insert into destination board AFTER source removal
+      destinationStateManager.setState((currentDestinationBoard) => {
+        if (entity.type === DataTypes.Lane) {
+          const collapsedState = destinationInstance.getViewState('list-collapse');
+          const val = sourceInstance.getViewState('list-collapse')?.[dragPath.last()] ?? false;
+          const op = (collapsedState: boolean[]) => {
+            const newState = [...collapsedState];
+            newState.splice(finalDropPath.last(), 0, val);
+            return newState;
+          };
+
+          destinationInstance.setViewState('list-collapse', undefined, op);
+
+          return update<Board>(insertEntity(currentDestinationBoard, finalDropPath, [toInsert]), {
+            data: { settings: { 'list-collapse': { $set: op(collapsedState) } } },
+          });
+        } else {
+          return insertEntity(currentDestinationBoard, finalDropPath, [toInsert]);
         }
       });
     },
-    [views]
+    [instances]
   );
 
   if (portals.length)
@@ -272,30 +318,43 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
 
               const overlayData = entity.getData();
 
-              const view = plugin.getKanbanView(entity.scopeId, overlayData.win);
-              const stateManager = plugin.stateManagers.get(view.file);
+              const instance = plugin.getKanbanInstance(entity.scopeId, overlayData.win);
+              if (!instance) return [null, null];
+
+              const stateManager = plugin.stateManagers.get(instance.file);
+              if (!stateManager) return [null, null];
+
               const data = getEntityFromPath(stateManager.state, entity.getPath());
-              const boardModifiers = getBoardModifiers(view, stateManager);
-              const filePath = view.file.path;
+              const viewStateAccessor = {
+                getViewState: (key: any) => instance.getViewState(key),
+                setViewState: (key: any, val: any, globalUpdater: any) =>
+                  instance.setViewState(key, val, globalUpdater),
+                useViewState: (key: any) =>
+                  (instance as any).useViewState?.(key) ?? instance.getViewState(key),
+              };
+              const boardModifiers = getBoardModifiers(viewStateAccessor, stateManager);
+              const filePath = instance.file.path;
+              const containerEl = isKanbanView(instance)
+                ? instance.contentEl
+                : instance.containerEl;
 
               return [
                 data,
                 {
-                  view,
+                  scopeId: instance.id,
+                  containerEl,
                   stateManager,
                   boardModifiers,
                   filePath,
+                  isEmbed: !isKanbanView(instance),
+                  viewStateAccessor,
                 },
               ];
             }, [entity]);
 
             if (data?.type === DataTypes.Lane) {
-              const boardView =
-                context?.view.viewSettings[frontmatterKey] ||
-                context?.stateManager.getSetting(frontmatterKey);
-              const collapseState =
-                context?.view.viewSettings['list-collapse'] ||
-                context?.stateManager.getSetting('list-collapse');
+              const boardView = context?.stateManager.getSetting(frontmatterKey);
+              const collapseState = context?.stateManager.getSetting('list-collapse');
               const laneIndex = entity.getPath().last();
 
               return (
@@ -314,7 +373,7 @@ export function DragDropApp({ win, plugin }: { win: Window; plugin: KanbanPlugin
                       lane={data as Lane}
                       laneIndex={laneIndex}
                       isStatic={true}
-                      isCollapsed={!!collapseState[laneIndex]}
+                      isCollapsed={!!collapseState?.[laneIndex]}
                       collapseDir={boardView === 'list' ? 'vertical' : 'horizontal'}
                     />
                   </div>

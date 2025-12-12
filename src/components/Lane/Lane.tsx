@@ -42,10 +42,10 @@ function DraggableLaneRaw({
   const [editState, setEditState] = useState<EditState>(EditingState.cancel);
   const [isSorting, setIsSorting] = useState(false);
 
-  const { stateManager, boardModifiers, view } = useContext(KanbanContext);
+  const { stateManager, boardModifiers, viewStateAccessor } = useContext(KanbanContext);
   const search = useContext(SearchContext);
 
-  const boardView = view.useViewState(frontmatterKey);
+  const boardView = viewStateAccessor.useViewState(frontmatterKey);
   const path = useNestedEntityPath(laneIndex);
   const laneWidth = stateManager.useSetting('lane-width');
   const fullWidth = boardView === 'list' && stateManager.useSetting('full-list-lane-width');
@@ -70,14 +70,14 @@ function DraggableLaneRaw({
 
   const toggleIsCollapsed = useCallback(() => {
     stateManager.setState((board) => {
-      const collapseState = [...view.getViewState('list-collapse')];
+      const collapseState = [...viewStateAccessor.getViewState('list-collapse')];
       collapseState[laneIndex] = !collapseState[laneIndex];
-      view.setViewState('list-collapse', collapseState);
+      viewStateAccessor.setViewState('list-collapse', collapseState);
       return update(board, {
         data: { settings: { 'list-collapse': { $set: collapseState } } },
       });
     });
-  }, [stateManager, laneIndex]);
+  }, [stateManager, laneIndex, viewStateAccessor]);
 
   const addItems = useCallback(
     (items: Item[]) => {
@@ -99,7 +99,7 @@ function DraggableLaneRaw({
       );
 
       // TODO: can we find a less brute force way to do this?
-      view.getWindow().setTimeout(() => {
+      elementRef.current?.win.setTimeout(() => {
         const laneItems = elementRef.current?.getElementsByClassName(c('lane-items'));
 
         if (laneItems.length) {
@@ -225,9 +225,9 @@ export interface LanesProps {
 
 function LanesRaw({ lanes, collapseDir }: LanesProps) {
   const search = useContext(SearchContext);
-  const { view } = useContext(KanbanContext);
-  const boardView = view.useViewState(frontmatterKey) || 'board';
-  const collapseState = view.useViewState('list-collapse') || [];
+  const { viewStateAccessor } = useContext(KanbanContext);
+  const boardView = viewStateAccessor.useViewState(frontmatterKey) || 'board';
+  const collapseState = viewStateAccessor.useViewState('list-collapse') || [];
 
   return (
     <>

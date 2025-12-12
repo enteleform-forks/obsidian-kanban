@@ -11,15 +11,19 @@
     "jsxImportSource": "preact",
     "lib": ["dom", "es6", "scripthost", "es2018"],
     "module": "ESNext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "noImplicitAny": true,
     "paths": {
-      "react": ["./node_modules/preact/compat/"],
+      "obsidian-daily-notes-interface/node_modules/obsidian": ["./node_modules/obsidian"],
+      "obsidian": ["./node_modules/obsidian"],
+      "obsidian/*": ["./node_modules/obsidian/*"],
       "react-dom": ["./node_modules/preact/compat/"],
-      "react-types": ["./node_modules/@types/react/"]
+      "react-types": ["./node_modules/@types/react/"],
+      "react": ["./node_modules/preact/compat/"]
     },
+    "typeRoots": ["./src/types", "./node_modules/@types"],
     "skipLibCheck": true,
     "target": "es2018"
   },
-  "include": ["src/*.ts", "src/*.tsx"]
+  "include": ["src"]
 }

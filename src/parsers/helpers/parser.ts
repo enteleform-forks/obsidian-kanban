@@ -20,18 +20,22 @@ export function markRangeForDeletion(str: string, range: { start: number; end: n
 }
 
 export function executeDeletion(str: string) {
+  if (!str) return '';
   return str.replace(/ *\0+ */g, ' ').trim();
 }
 
 export function replaceNewLines(str: string) {
+  if (!str) return '';
   return str.trim().replace(/(?:\r\n|\n)/g, '<br>');
 }
 
 export function replaceBrs(str: string) {
+  if (!str) return '';
   return str.replace(/<br>/g, '\n').trim();
 }
 
 export function indentNewLines(str: string) {
+  if (!str) return '';
   const useTab = (app.vault as any).getConfig('useTab');
   return str.trim().replace(/(?:\r\n|\n)/g, useTab ? '\n\t' : '\n    ');
 }
@@ -54,6 +58,7 @@ export function removeBlockId(str: string) {
 }
 
 export function dedentNewLines(str: string) {
+  if (!str) return '';
   return str.trim().replace(/(?:\r\n|\n)(?: {4}|\t)/g, '\n');
 }
 

@@ -1,5 +1,6 @@
 import 'obsidian';
 
+import type { Instance } from '../types/instance';
 import { Plugin } from '../types/options';
 
 export interface Config {
@@ -15,7 +16,7 @@ declare global {
 }
 
 function rangePlugin(config: Config = {}): Plugin {
-  return function (fp) {
+  return function (fp: Instance) {
     let dateFormat = '',
       secondInput: HTMLInputElement,
       _secondInputFocused: boolean,

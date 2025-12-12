@@ -525,7 +525,9 @@ async function handleNullDraggable(
   win: Window & typeof globalThis
 ) {
   const isClipboardEvent = (e as DragEvent).view ? false : true;
-  const forcePlaintext = isClipboardEvent ? stateManager.getAView().isShiftPressed : false;
+  // Check if shift is pressed (for views) or default to false (for embeds)
+  const view = stateManager.getAView();
+  const forcePlaintext = isClipboardEvent ? (view?.isShiftPressed ?? false) : false;
   const transfer = isClipboardEvent
     ? (e as ClipboardEvent).clipboardData
     : (e as DragEvent).dataTransfer;

@@ -189,6 +189,8 @@ export class DragManager {
     this.scrollEntities.forEach((entity) => {
       const data = entity.getData();
 
+      // Filter by window and type acceptance
+      // The intersection detection will determine which board the drag is over
       if (win === data.win && data.accepts.includes(type)) {
         scrollEntities.push(entity);
         scrollHitboxes.push(entity.getHitbox());
@@ -475,34 +477,44 @@ export function useDragHandle(
   }, []);
 }
 
-export function createHTMLDndHandlers(stateManager: StateManager) {
+export function createHTMLDndHandlers(stateManager: StateManager, instanceId?: string) {
   const dndManager = useContext(DndManagerContext);
+
+  // Use provided instanceId or fall back to getting a view's id
+  const getInstanceId = () => instanceId ?? stateManager.getAView()?.id;
+
   const onDragOver = useCallback(
     (e: DragEvent) => {
+      const id = getInstanceId();
+      if (!id) return;
+
       if (dndManager.dragManager.isHTMLDragging) {
         e.preventDefault();
         dndManager.dragManager.dragMoveHTML(e);
       } else {
-        dndManager.dragManager.dragStartHTML(e, stateManager.getAView().id);
+        dndManager.dragManager.dragStartHTML(e, id);
       }
 
       dndManager.dragManager.onHTMLDragLeave(() => {
-        dndManager.dragManager.dragEndHTML(e, stateManager.getAView().id, [], true);
+        dndManager.dragManager.dragEndHTML(e, id, [], true);
       });
     },
-    [dndManager, stateManager]
+    [dndManager, stateManager, instanceId]
   );
 
   const onDrop = useCallback(
     async (e: DragEvent) => {
+      const id = getInstanceId();
+      if (!id) return;
+
       dndManager.dragManager.dragEndHTML(
         e,
-        stateManager.getAView().id,
+        id,
         await handleDragOrPaste(stateManager, e, activeWindow as Window & typeof globalThis),
         false
       );
     },
-    [dndManager, stateManager]
+    [dndManager, stateManager, instanceId]
   );
 
   return {
